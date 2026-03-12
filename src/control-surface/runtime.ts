@@ -1,0 +1,637 @@
+import fs from "node:fs";
+import path from "node:path";
+import net from "node:net";
+import crypto from "node:crypto";
+import type http from "node:http";
+import { loadConfig, type AutonomaConfig } from "../config/load-config.ts";
+import type {
+	ClaudeSessionListItem as SessionListItem,
+	ControlSurfaceWebSocketClientEvent,
+	DeliveryMode,
+	DirectSessionMessageResponse,
+	HookResponse,
+	RuntimeWhatsAppStartResponse,
+	RuntimeWhatsAppStopResponse,
+	SessionTranscriptResponse,
+	StatusResponse,
+	WhatsAppDaemonStatus as ControlSurfaceWhatsAppStatus,
+} from "../contracts/index.ts";
+import { openBlackboard, pingBlackboard, type BlackboardDatabase } from "../blackboard/db.ts";
+import {
+	endPiSession,
+	reconcilePreviousPiSessions,
+	touchPiPrompt,
+	upsertPiSession,
+} from "../blackboard/queries/pi-sessions.ts";
+import {
+	findIdleCleanupCandidates,
+	getSessionById,
+	listSessions,
+	markSessionEnded,
+	markStaleSessions,
+} from "../blackboard/queries/sessions.ts";
+import { killTmuxSession } from "../claude-sessions/tmux.ts";
+import { readTranscriptPage } from "./transcript.ts";
+import { createAutonomaAgent } from "./pi/create-agent.ts";
+import { PiSessionState } from "./pi/session-state.ts";
+import { subscribeToPiSession } from "./pi/subscribe.ts";
+import { TurnQueue, type QueueItem, type QueueSource } from "./queue/turn-queue.ts";
+import { WebSocketHub, type WebSocketClient } from "./ws/hub.ts";
+import { sendDaemonCommand } from "../whatsapp/ipc.ts";
+import { getDaemonStatus, startDaemonProcess, stopDaemonProcess, waitForDaemonReady } from "../whatsapp/process.ts";
+import { directSessionMessage, manageSessionTool } from "./tools/manage-session.ts";
+import { launchClaudeCodeTool } from "./tools/launch-claude-code.ts";
+
+type EnqueueInput = {
+	text: string;
+	source: QueueSource;
+	metadata?: Record<string, unknown>;
+	deliveryMode?: DeliveryMode;
+	webClientId?: string;
+};
+
+const FORWARDED_HOOK_EVENTS = new Set(["session-start", "stop", "session-end"]);
+
+export class ControlSurfaceRuntime {
+	readonly config: AutonomaConfig;
+	readonly blackboard: BlackboardDatabase;
+	readonly sessionState = new PiSessionState();
+	readonly runtimeInstanceId = crypto.randomUUID();
+	readonly startedAt = Date.now();
+	readonly wsHub: WebSocketHub;
+	readonly queue: TurnQueue;
+	server?: http.Server;
+	piSession?: any;
+	piModelInfo?: { provider?: string; id?: string };
+	private unsubscribePi?: () => void;
+	private stopping = false;
+	private maintenanceTimer?: NodeJS.Timeout;
+	private whatsappStatusCache: {
+		status: ControlSurfaceWhatsAppStatus;
+		pid?: number;
+		managedByControlSurface: true;
+		requiresManualAuth?: boolean;
+	} = {
+		status: "stopped",
+		managedByControlSurface: true,
+	};
+
+	constructor(config: AutonomaConfig = loadConfig()) {
+		this.config = config;
+		this.blackboard = openBlackboard(config.blackboardPath);
+		this.wsHub = new WebSocketHub(this.handleWebSocketMessage.bind(this));
+		this.queue = new TurnQueue({
+			process: this.processQueueItem.bind(this),
+			onDepthChange: (depth) => this.sessionState.setQueueDepth(depth),
+			onItemStart: (item) => {
+				this.sessionState.setBusy(true, item);
+				this.wsHub.broadcast({ type: "queue_item_start", item });
+			},
+			onItemEnd: (item, error) => {
+				this.sessionState.setBusy(false);
+				this.wsHub.broadcast({
+					type: "queue_item_end",
+					itemId: item.id,
+					error: error instanceof Error ? error.message : error ? String(error) : undefined,
+				});
+			},
+		});
+	}
+
+	attachServer(server: http.Server): void {
+		this.server = server;
+	}
+
+	async start(): Promise<void> {
+		this.ensurePidFile();
+		reconcilePreviousPiSessions(this.blackboard, "orchestrator", this.runtimeInstanceId, "restart");
+
+		const created = await createAutonomaAgent({
+			config: this.config,
+			customTools: this.createCustomTools(),
+		});
+		this.piSession = created.session;
+		this.piModelInfo = created.modelInfo;
+		this.sessionState.initialize(created.session.sessionId, created.session.sessionFile, created.session.messages.length);
+		upsertPiSession(this.blackboard, {
+			piSessionId: created.session.sessionId,
+			role: "orchestrator",
+			status: "idle",
+			runtimeInstanceId: this.runtimeInstanceId,
+			pid: process.pid,
+			sessionFile: created.session.sessionFile,
+			cwd: process.env.HOME ?? process.cwd(),
+			agentDir: this.config.controlSurfaceAgentDir,
+			modelProvider: created.modelInfo.provider,
+			modelId: created.modelInfo.id,
+			thinkingLevel: this.config.piThinkingLevel,
+			startedAt: new Date(this.startedAt).toISOString(),
+			lastEventAt: new Date().toISOString(),
+		});
+		this.unsubscribePi = subscribeToPiSession(created.session, this.sessionState, this.blackboard, this.wsHub);
+		await this.ensureWhatsAppDaemon();
+		await this.refreshWhatsAppStatus();
+		this.startMaintenanceLoop();
+		this.log(`runtime started on ${this.config.controlSurfaceHost}:${this.config.controlSurfacePort}`);
+	}
+
+	async stop(reason: string = "shutdown", crash: boolean = false): Promise<void> {
+		if (this.stopping) return;
+		this.stopping = true;
+		this.log(`runtime stopping: ${reason}`);
+		this.queue.stop();
+		if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+		try {
+			this.unsubscribePi?.();
+		} catch {
+			// ignore
+		}
+		if (this.piSession) {
+			endPiSession(
+				this.blackboard,
+				this.piSession.sessionId,
+				crash ? "crashed" : "ended",
+				reason,
+				new Date().toISOString(),
+			);
+			try {
+				this.piSession.dispose?.();
+			} catch {
+				// ignore
+			}
+		}
+		try {
+			await this.stopWhatsAppDaemon();
+			await this.refreshWhatsAppStatus();
+		} catch {
+			// ignore
+		}
+		try {
+			this.wsHub.closeAll();
+		} catch {
+			// ignore
+		}
+		await new Promise<void>((resolve) => {
+			if (!this.server) return resolve();
+			this.server.close(() => resolve());
+		});
+		try {
+			if (fs.existsSync(this.config.controlSurfacePidPath)) fs.unlinkSync(this.config.controlSurfacePidPath);
+		} catch {
+			// ignore
+		}
+		this.blackboard.close();
+	}
+
+	enqueue(input: EnqueueInput): { ok: true; queued: true; queueDepth: number; item: QueueItem } {
+		const item: QueueItem = {
+			id: crypto.randomUUID(),
+			source: input.source,
+			text: input.text,
+			metadata: input.metadata,
+			receivedAt: new Date().toISOString(),
+			webClientId: input.webClientId,
+			deliveryMode: input.deliveryMode ?? "followUp",
+		};
+		const queueDepth = this.queue.enqueue(item);
+		this.log(`queued ${item.source} item ${item.id} depth=${queueDepth}`);
+		return { ok: true, queued: true, queueDepth, item };
+	}
+
+	handleHook(eventName: string, payload: Record<string, unknown>): HookResponse {
+		const normalized = eventName.toLowerCase();
+		if (!FORWARDED_HOOK_EVENTS.has(normalized)) {
+			return { ok: true, filtered: true };
+		}
+
+		// Only forward hooks for sessions tracked in the blackboard (agent-managed).
+		// Ignore hooks from the user's own Claude Code sessions.
+		const sessionId = pickString(payload, ["session_id", "sessionId"]);
+		if (sessionId) {
+			const piSessionId = this.piSession?.sessionId;
+			const isOwnPiSession = piSessionId && sessionId === piSessionId;
+			if (!isOwnPiSession) {
+				const known = getSessionById(this.blackboard, sessionId);
+				if (!known) {
+					return { ok: true, filtered: true };
+				}
+			}
+		}
+
+		const text = formatHookMessage(normalized, payload);
+		const queued = this.enqueue({
+			text,
+			source: "hook",
+			metadata: { event: normalized, ...payload },
+			deliveryMode: "followUp",
+		});
+		return { ok: true, queued: true, queueDepth: queued.queueDepth };
+	}
+
+	getStatus(): StatusResponse {
+		const snapshot = this.sessionState.getSnapshot();
+		const whatsapp = this.getWhatsAppStatusSnapshot();
+		const blackboardStatus = pingBlackboard(this.blackboard) ? "ok" : "error";
+		return {
+			ok: true,
+			pid: process.pid,
+			uptime: Math.floor((Date.now() - this.startedAt) / 1000),
+			pi: {
+				sessionId: snapshot.sessionId,
+				sessionFile: snapshot.sessionFile,
+				messageCount: this.piSession?.messages?.length ?? snapshot.messageCount,
+				lastPromptAt: snapshot.lastPromptAt,
+				queueDepth: snapshot.queueDepth,
+				busy: snapshot.busy,
+			},
+			whatsapp: {
+				status: whatsapp.status,
+				pid: whatsapp.pid ?? null,
+				managedByControlSurface: whatsapp.managedByControlSurface,
+				requiresManualAuth: whatsapp.requiresManualAuth,
+			},
+			blackboard: blackboardStatus,
+		};
+	}
+
+	getSessionList(): SessionListItem[] {
+		return listSessions(this.blackboard);
+	}
+
+	async getTranscript(sessionId: string, cursor?: string, limit: number = 50): Promise<SessionTranscriptResponse> {
+		const session = getSessionById(this.blackboard, sessionId);
+		if (!session?.transcriptPath) {
+			return {
+				sessionId,
+				transcriptPath: null,
+				oldestFirst: true as const,
+				items: [],
+			};
+		}
+		return readTranscriptPage(sessionId, session.transcriptPath, cursor ?? "0", limit);
+	}
+
+	async directSessionMessage(sessionId: string, text: string): Promise<DirectSessionMessageResponse> {
+		return directSessionMessage(this, sessionId, text);
+	}
+
+	async startWhatsAppDaemon(): Promise<RuntimeWhatsAppStartResponse> {
+		const existing = await getDaemonStatus();
+		if (existing) {
+			this.whatsappStatusCache = this.mapDaemonStatus(existing);
+			return { ok: true, ...this.whatsappStatusCache };
+		}
+		await startDaemonProcess();
+		const daemon = await waitForDaemonReady();
+		this.whatsappStatusCache = this.mapDaemonStatus(daemon);
+		return { ok: true, ...this.whatsappStatusCache };
+	}
+
+	async stopWhatsAppDaemon(): Promise<RuntimeWhatsAppStopResponse> {
+		const daemon = await stopDaemonProcess();
+		this.whatsappStatusCache = this.mapDaemonStatus(daemon);
+		return { ok: true, ...this.whatsappStatusCache };
+	}
+
+	handleUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Buffer | undefined): boolean {
+		return this.wsHub.handleUpgrade(req, socket, head, this.config.controlSurfaceToken);
+	}
+
+	private async processQueueItem(item: QueueItem): Promise<void> {
+		if (!this.piSession) throw new Error("Pi session not initialized");
+		const promptAt = this.sessionState.notePrompt(this.piSession.messages.length);
+		touchPiPrompt(this.blackboard, this.piSession.sessionId, promptAt, "active");
+		if (this.piSession.isStreaming) {
+			await this.piSession.prompt(item.text, { streamingBehavior: item.deliveryMode ?? "followUp" });
+		} else {
+			await this.piSession.prompt(item.text);
+		}
+		this.sessionState.noteEvent(this.piSession.messages.length);
+	}
+
+	private createCustomTools(): Array<any> {
+		return [
+			{
+				name: "send_whatsapp",
+				label: "Send WhatsApp",
+				description: "Send a WhatsApp message through the runtime-owned daemon.",
+				parameters: {
+					type: "object",
+					properties: {
+						text: { type: "string", description: "Message text to send" },
+						contextRef: { type: "string", description: "Optional reply-matching context" },
+						expectReply: { type: "boolean", description: "Create a pending action for a reply" },
+						kind: { type: "string", description: "Pending action kind when expectReply is true" },
+						relatedSessionId: { type: "string", description: "Optional related Claude session id" },
+						relatedTodoistTaskId: { type: "string", description: "Optional related Todoist task id" },
+					},
+					required: ["text"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const response = await this.sendWhatsAppCommand({
+						command: "send",
+						text: `B-bot: ${params.text}`,
+						contextRef: params.contextRef ?? null,
+						pendingAction: params.expectReply
+							? {
+								kind: params.kind ?? "clarify",
+								promptText: params.text,
+								relatedSessionId: params.relatedSessionId ?? undefined,
+								relatedTodoistTaskId: params.relatedTodoistTaskId ?? undefined,
+							}
+							: undefined,
+					});
+					return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: response };
+				},
+			},
+			{
+				name: "poll_whatsapp",
+				label: "Poll WhatsApp",
+				description: "Poll unread inbound WhatsApp messages.",
+				parameters: {
+					type: "object",
+					properties: {
+						ack: { type: "boolean", description: "Mark messages processed after polling" },
+						limit: { type: "number", description: "Maximum messages to return" },
+					},
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const response = await this.sendWhatsAppCommand({
+						command: "poll",
+						ack: Boolean(params.ack),
+						limit: typeof params.limit === "number" ? params.limit : undefined,
+					});
+					return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: response };
+				},
+			},
+			{
+				name: "query_blackboard",
+				label: "Query Blackboard",
+				description: "Run read-only SQL against the Autonoma blackboard.",
+				parameters: {
+					type: "object",
+					properties: {
+						sql: { type: "string", description: "SELECT or PRAGMA SQL statement" },
+					},
+					required: ["sql"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const rows = this.queryBlackboard(params.sql);
+					return { content: [{ type: "text", text: JSON.stringify(rows, null, 2) }], details: rows };
+				},
+			},
+			{
+				name: "manage_session",
+				label: "Manage Claude Session",
+				description: "List, inspect, inject into, or kill tmux-backed Claude Code sessions.",
+				parameters: {
+					type: "object",
+					properties: {
+						action: { type: "string", enum: ["list", "inspect", "inject", "kill"] },
+						session_id: { type: "string" },
+						tmux_session: { type: "string" },
+						sessionName: { type: "string" },
+						text: { type: "string" },
+						verify_inference: { type: "boolean" },
+					},
+					required: ["action"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const result = await manageSessionTool(this, params);
+					return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+				},
+			},
+			{
+				name: "launch_claude_code",
+				label: "Launch Claude Code",
+				description: "Launch a new interactive Claude Code session inside tmux with Autonoma metadata.",
+				parameters: {
+					type: "object",
+					properties: {
+						cwd: { type: "string" },
+						prompt: { type: "string" },
+						session_name: { type: "string" },
+						task_description: { type: "string" },
+						todoist_task_id: { type: "string" },
+					},
+					required: ["cwd", "prompt"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const result = await launchClaudeCodeTool(params, this.config);
+					return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+				},
+			},
+		];
+	}
+
+	private queryBlackboard(sql: string): Array<Record<string, unknown>> {
+		const normalized = String(sql ?? "").trim().replace(/;+\s*$/, "");
+		if (!normalized) throw new Error("SQL is required");
+		if (!/^(select|pragma)\b/i.test(normalized)) {
+			throw new Error("query_blackboard only allows SELECT and PRAGMA");
+		}
+		if (normalized.includes(";")) {
+			throw new Error("multiple SQL statements are not allowed");
+		}
+		return this.blackboard.prepare(normalized).all() as Array<Record<string, unknown>>;
+	}
+
+	private async sendWhatsAppCommand(command: Record<string, unknown>): Promise<any> {
+		try {
+			const response = await sendDaemonCommand(command as any);
+			if (response.daemon) {
+				this.whatsappStatusCache = this.mapDaemonStatus(response.daemon);
+			}
+			return response;
+		} catch {
+			await this.startWhatsAppDaemon();
+			const response = await sendDaemonCommand(command as any);
+			if (response.daemon) {
+				this.whatsappStatusCache = this.mapDaemonStatus(response.daemon);
+			}
+			return response;
+		}
+	}
+
+	private getWhatsAppStatusSnapshot(): {
+		status: ControlSurfaceWhatsAppStatus;
+		pid?: number;
+		managedByControlSurface: true;
+		requiresManualAuth?: boolean;
+	} {
+		return this.whatsappStatusCache;
+	}
+
+	private mapDaemonStatus(daemon?: { status: ControlSurfaceWhatsAppStatus; pid?: number; requiresManualAuth?: boolean }): {
+		status: ControlSurfaceWhatsAppStatus;
+		pid?: number;
+		managedByControlSurface: true;
+		requiresManualAuth?: boolean;
+	} {
+		if (!daemon) {
+			return { status: "stopped", managedByControlSurface: true };
+		}
+
+		return {
+			status: daemon.status,
+			pid: daemon.pid,
+			managedByControlSurface: true,
+			requiresManualAuth: daemon.requiresManualAuth,
+		};
+	}
+
+	private async refreshWhatsAppStatus(): Promise<void> {
+		this.whatsappStatusCache = this.mapDaemonStatus(await getDaemonStatus());
+	}
+
+	private async ensureWhatsAppDaemon(): Promise<void> {
+		await this.refreshWhatsAppStatus();
+		if (this.whatsappStatusCache.status !== "stopped") return;
+		try {
+			await this.startWhatsAppDaemon();
+		} catch (error) {
+			this.log(`whatsapp start skipped: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	private startMaintenanceLoop(): void {
+		this.maintenanceTimer = setInterval(async () => {
+			try {
+				pingBlackboard(this.blackboard);
+				await this.refreshWhatsAppStatus();
+				markStaleSessions(this.blackboard, this.config.stallMinutes, this.config.toolTimeoutMinutes);
+				const idleBefore = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+				const oldSessions = findIdleCleanupCandidates(this.blackboard, idleBefore);
+				for (const session of oldSessions) {
+					if (session.tmuxSession) {
+						try {
+							await killTmuxSession(session.tmuxSession);
+						} catch {
+							// ignore
+						}
+					}
+					markSessionEnded(this.blackboard, session.sessionId, "idle_timeout");
+				}
+				const snapshot = this.sessionState.getSnapshot();
+				if (snapshot.busy && snapshot.currentTurnStartedAt) {
+					const age = Date.now() - Date.parse(snapshot.currentTurnStartedAt);
+					if (age > this.config.toolTimeoutMinutes * 60_000) {
+						this.log(`queue turn appears stuck for ${Math.round(age / 1000)}s`);
+					}
+				}
+			} catch (error) {
+				this.log(`maintenance error: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}, 60_000);
+	}
+
+	private ensurePidFile(): void {
+		const existingPid = readPid(this.config.controlSurfacePidPath);
+		if (existingPid && isPidRunning(existingPid)) {
+			throw new Error(`control surface already running with pid ${existingPid}`);
+		}
+		fs.mkdirSync(path.dirname(this.config.controlSurfacePidPath), { recursive: true });
+		fs.writeFileSync(this.config.controlSurfacePidPath, `${process.pid}\n`, "utf8");
+	}
+
+	private log(message: string): void {
+		const line = `[${new Date().toISOString()}] ${message}`;
+		console.log(line);
+		fs.appendFileSync(this.config.controlSurfaceLogPath, `${line}\n`, "utf8");
+	}
+
+	private async handleWebSocketMessage(
+		client: WebSocketClient,
+		data: ControlSurfaceWebSocketClientEvent | unknown,
+	): Promise<void> {
+		if (!data || typeof data !== "object") return;
+		const payload = data as ControlSurfaceWebSocketClientEvent;
+		if (payload.type === "message" && typeof payload.text === "string") {
+			const queued = this.enqueue({
+				text: `[Web] User: \"${payload.text}\"`,
+				source: "web",
+				metadata: { via: "ws" },
+				webClientId: client.id,
+				deliveryMode: payload.deliveryMode === "steer" ? "steer" : "followUp",
+			});
+			this.wsHub.send(client.id, { type: "message_queued", itemId: queued.item.id, queueDepth: queued.queueDepth });
+		}
+	}
+}
+
+function formatHookMessage(eventName: string, payload: Record<string, unknown>): string {
+	const sessionId = pickString(payload, ["session_id", "sessionId"]);
+	const cwd = pickString(payload, ["cwd"]);
+	const transcript = pickString(payload, ["transcript_path", "transcriptPath"]);
+	const tmuxSession = pickString(payload, ["tmux_session", "tmuxSession", "AUTONOMA_TMUX_SESSION"]);
+	const project = pickString(payload, ["project", "project_label", "projectLabel"]);
+	const reason = pickString(payload, ["reason", "stop_reason", "session_end_reason"]);
+	const agentManaged = payload.agent_managed === true || payload.agentManaged === true || payload.agent_managed === 1 || payload.agentManaged === 1;
+	const lines = [
+		`[Hook: ${humanizeHookEvent(eventName)}] ${hookVerb(eventName)}`,
+		sessionId ? `Session ID: ${sessionId}` : undefined,
+		project ? `Project: ${project}` : undefined,
+		cwd ? `CWD: ${cwd}` : undefined,
+		transcript ? `Transcript: ${transcript}` : undefined,
+		eventName === "session-start" ? `Agent managed: ${agentManaged ? "yes" : "no"}` : undefined,
+		tmuxSession ? `Tmux session: ${tmuxSession}` : undefined,
+		reason ? `Reason: ${reason}` : undefined,
+	].filter(Boolean);
+	return lines.join("\n");
+}
+
+function pickString(payload: Record<string, unknown>, keys: string[]): string | undefined {
+	for (const key of keys) {
+		const value = payload[key];
+		if (typeof value === "string" && value.trim()) return value;
+	}
+	return undefined;
+}
+
+function humanizeHookEvent(eventName: string): string {
+	return eventName
+		.split("-")
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join("");
+}
+
+function hookVerb(eventName: string): string {
+	switch (eventName) {
+		case "session-start":
+			return "Claude Code session started.";
+		case "stop":
+			return "Claude Code session stopped.";
+		case "session-end":
+			return "Claude Code session ended.";
+		case "subagent-start":
+			return "Claude subagent started.";
+		case "subagent-stop":
+			return "Claude subagent stopped.";
+		default:
+			return "Hook event received.";
+	}
+}
+
+function readPid(pidPath: string): number | undefined {
+	try {
+		if (!fs.existsSync(pidPath)) return undefined;
+		const value = Number(fs.readFileSync(pidPath, "utf8").trim());
+		return Number.isFinite(value) ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isPidRunning(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}

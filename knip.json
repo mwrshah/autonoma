@@ -1,0 +1,10 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/whatsapp/cli.ts",
+    "src/whatsapp/daemon.ts"
+  ],
+  "project": [
+    "src/**/*.ts"
+  ]
+}

@@ -1,0 +1,443 @@
+---
+name: "skill-maker-1"
+description: Create new Claude Code skills with proper structure and documentation
+argument-hint: "[skill-name-or-description]"
+disable-model-invocation: false
+model: opus
+---
+
+# Skill Maker - Create Claude Code Skills
+
+You are an expert at creating Claude Code skills. Your task is to create a new skill based on the user's request: **$ARGUMENTS**
+
+## Writing Tone
+
+When writing skill prompts, use a forward-facing, positive tone. State what to do, not what to avoid. Keep language tight, succinct, and clear — not overly prescriptive. Position instructions as "the way things are done" rather than rules to follow. This applies to all skill content you write: descriptions, instructions, steps, and examples.
+
+## Claude Code Skills - Complete Reference
+
+### Folder Structure
+
+Skills live in one of two locations:
+- **Global skills**: `~/.claude/skills/` - Available in all projects
+- **Project skills**: `<project>/.claude/skills/` - Project-specific
+
+Each skill is a directory containing a `SKILL.md` file, and optionally helper scripts and reference docs:
+```
+~/.claude/skills/
+├── my-skill/
+│   └── SKILL.md
+├── another-skill/
+│   ├── SKILL.md
+│   ├── scripts/          # Helper scripts live here
+│   │   └── helper.py
+│   └── reference.md      # Optional detailed docs
+└── README.md
+```
+
+### Bundling Scripts with Skills
+
+When a skill needs helper scripts (Python utilities, shell scripts, etc.), place them in a `scripts/` subdirectory alongside SKILL.md. This keeps the skill self-contained and portable.
+
+**Structure:**
+```
+~/.claude/skills/my-skill/
+├── SKILL.md
+└── scripts/
+    ├── fetch_data.py
+    └── transform.sh
+```
+
+**Reference them in SKILL.md** with markdown links so Claude knows they exist and can Read them on demand:
+```markdown
+## Supporting Files
+See [scripts/fetch_data.py](scripts/fetch_data.py) for the data fetcher.
+```
+
+Note on loading behavior — there are three tiers:
+- **SKILL.md content**: fully injected into context on every invocation
+- **Markdown-linked files**: Claude sees the link text but must explicitly `Read` the file — useful for large reference docs, API specs, or scripts that Claude may need to inspect
+- **Unlisted files in the skill dir**: Claude won't know they exist unless it searches
+
+So put essential instructions directly in SKILL.md. Use linked files for things Claude *might* need to reference but shouldn't pay the context cost for on every run.
+
+Because linked files are loaded via `Read` (not the skill loader), two rules apply when writing them:
+- **`$ARGUMENTS` is never expanded in reference files.** Only SKILL.md gets variable expansion. In a reference file, `$ARGUMENTS` stays literal. Refer to "the user's input" or "the provided text" instead.
+- **"Above" is fine. "Below" and "the following" are wrong.** Reference files are the last thing loaded — the user's input is always above them in the message array.
+
+**Execute bundled scripts in SKILL.md** using relative paths from the skill directory:
+```bash
+python3 scripts/fetch_data.py "$URL"
+uv run --with some-package python scripts/fetch_data.py "$URL"
+```
+
+The agent resolves relative paths from the skill directory root automatically — no absolute paths needed. This works for both personal skills and plugin skills, making scripts portable by default.
+
+This pattern is useful when your skill wraps a reusable utility — the script travels with the skill, and the SKILL.md stays lean and focused on orchestration instructions.
+
+### Plugin Skills
+
+When the target directory contains `plugins/` in its path, the skill is part of a bundled plugin. Apply these rules:
+
+1. Skill names are bare — just the skill name (e.g., `my-skill`), no plugin prefix.
+
+2. **Use relative paths** for scripts and resources (e.g., `scripts/fetch_data.py`). The agent resolves these from the skill directory root automatically. Never hardcode `~/` or absolute paths.
+
+3. **`${CLAUDE_PLUGIN_ROOT}`** is only needed in hooks (`hooks.json`) and MCP configs — JSON contexts where relative paths don't work. It is not needed in SKILL.md or agent markdown.
+
+### SKILL.md Format
+
+Every skill needs a `SKILL.md` with frontmatter and content:
+
+```yaml
+---
+name: skill-name
+description: Short description for autocomplete
+argument-hint: "[optional-arg-hints]"
+disable-model-invocation: false
+context: fork|default
+agent: general-purpose|Explore|Bash
+allowed-tools: Bash(*), Read(*), Edit(*)
+---
+
+# Skill Content
+
+This is the prompt that Claude receives when the skill is invoked.
+You can include:
+- Instructions
+- Examples
+- Context from commands: ! `git status`
+- Arguments from user: $ ARGUMENTS or $ 0, $ 1, $ 2...
+```
+
+### Frontmatter Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Skill identifier, used as `/name` |
+| `description` | Yes | Shows in autocomplete |
+| `argument-hint` | No | Help text for arguments, e.g., `"[file-path] [new-name]"` |
+| `disable-model-invocation` | No | If true, skill only runs commands but doesn't send prompt to Claude |
+| `model` | No | Pin to a specific model: `haiku`, `sonnet`, or `opus`. Overrides the currently selected model for this skill — use `haiku` for lightweight/fast tasks, `opus` for deep reasoning. |
+| `context` | No | `fork` creates isolated context, `default` shares main context |
+| `agent` | No | Specify agent type: `Explore`, `Bash`, `general-purpose`, etc. |
+| `allowed-tools` | No | Whitelist tools for safety, e.g., `Bash(gh *, git *)` |
+
+### Arguments System
+
+`$ ARGUMENTS` inserts all args as a single string; `$ 0`, `$ 1`, `$N` insert positional args (0-indexed). These are text-substituted into the prompt before Claude sees it. Use `argument-hint` in frontmatter to show users what to pass.
+
+**Positional flow:** `$ ARGUMENTS` expands in place — wherever you write it in SKILL.md, the user's args appear there. If SKILL.md doesn't reference `$ ARGUMENTS` at all, Claude Code auto-appends `ARGUMENTS: <value>` at the bottom of the injected content. The user's original message always sits above the skill injection in the message array.
+
+> **Escaping note:** Throughout this skill's documentation, argument tokens are written with a space after the dollar sign (e.g. `$ ARGUMENTS`, `$ 0`) to prevent them from being substituted when *this* skill runs. In any skill you create, write them without the space: `$N`, etc.
+
+See [reference/passing-arguments.md](reference/passing-arguments.md) for full details, examples, and limitations.
+
+### Dynamic Context with Commands
+
+Execute shell commands when the skill is invoked using "!" immediately followed by a backtick-wrapped command (no space between them). The command output replaces the placeholder **before Claude sees the prompt**. This is how you inject runtime context (current branch, repo, etc.) into a skill.
+
+Syntax: "!" immediately followed by a backtick-wrapped command, with no space between them in your actual skill file.
+
+> **Meta note:** The examples below use a space between "!" and the backtick to prevent execution inside THIS skill. When writing your skill file, remove the space.
+
+```yaml
+---
+name: pr-context
+context: fork
+agent: Explore
+allowed-tools: Bash(gh *)
+---
+
+## Current PR Context
+- Branch: ! `git branch --show-current`
+- Status: ! `git status --short`
+- Diff summary: ! `gh pr diff --name-only`
+- PR comments: ! `gh pr view --comments`
+
+## Task
+$ ARGUMENTS
+```
+
+^ In the actual skill file, "!" must be directly touching the backtick with no space, and remove the space after `$` in `$ ARGUMENTS`.
+
+### Environment Variables Available
+
+Claude Code provides these variables in skill context:
+- `$CLAUDE_SESSION_ID` - Current session ID
+- `$CLAUDE_PROJECT_ROOT` - Project root directory
+- Other standard env vars from shell
+
+### Common Patterns
+
+**1. Investigation/Research Skill:**
+```yaml
+---
+name: investigate
+description: Deep dive into codebase feature
+context: fork
+agent: Explore
+---
+
+Investigate: $ ARGUMENTS
+
+Approach:
+1. Search for related files and code
+2. Read key implementations
+3. Document findings in docs/YYYY-MM-DD_HHMMhrs_$ 0.md
+4. Provide summary
+```
+
+**2. Git/GitHub Skill:**
+```yaml
+---
+name: pr-ready
+description: Prepare branch for PR
+allowed-tools: Bash(git *, gh *)
+---
+
+Prepare branch for PR: $ ARGUMENTS
+
+Steps:
+1. Check git status
+2. Run linting/type checks
+3. Review uncommitted changes
+4. Create branch following convention: NNN-description
+5. Stage and commit with proper message
+```
+
+**3. Code Generation Skill:**
+```yaml
+---
+name: gen-component
+description: Generate React component with tests
+argument-hint: "[component-name] [component-type]"
+---
+
+Generate a $ 1 component named $ 0.
+
+Requirements:
+- TypeScript
+- Props interface
+- Unit tests with RTL
+- Storybook story
+- Documentation comments
+```
+
+**4. Skill with Bundled Scripts:**
+```yaml
+---
+name: research-tool
+description: Fetch and save web content for research
+argument-hint: "[url] [topic-name]"
+---
+
+Fetch content from $ 0 and save it under the topic "$ 1".
+
+## Supporting Files
+See [scripts/fetch_content.py](scripts/fetch_content.py) for the content fetcher.
+
+## Steps
+1. Run the bundled script:
+   ```bash
+   uv run --with requests python scripts/fetch_content.py "$ 0" "/tmp/research/$ 1"
+   ```
+2. Read the saved output and summarize key points
+```
+
+The script lives at `scripts/fetch_content.py` — self-contained, travels with the skill. The agent resolves the relative path from the skill directory automatically.
+
+**5. Pure Command Skill (no AI invocation):**
+```yaml
+---
+name: quick-status
+description: Show git and project status
+disable-model-invocation: true
+---
+
+! `git status`
+! `git log -5 --oneline`
+! `git branch -v`
+```
+
+^ In the actual skill file, remove the space between "!" and the backtick.
+
+**6. Routing Gate for Workflow Skills:**
+
+When a skill has a stepwise workflow *and* reusable domain knowledge (scripts, schemas, conventions), add a routing section at the top of Instructions that lets the user bypass the default pipeline:
+
+```yaml
+---
+name: my-workflow
+description: Run a structured workflow or use its tools freely
+---
+
+# My Workflow Skill
+
+## Supporting Files
+See [scripts/tool.py](scripts/tool.py) for the utility script.
+
+## Instructions
+
+$ ARGUMENTS
+
+### Routing: read the user instruction first
+
+- **Custom objective**: If the user's instruction requires a deviation
+  from the default workflow (e.g. a different analysis, a one-off use
+  of the bundled scripts), use whatever combination of the scripts and
+  context below to achieve their objective. You are not bound to the
+  workflow steps.
+
+- **Default workflow** (when no instruction is provided, or when the
+  user explicitly requests the standard workflow): Follow Steps 1–N
+  below in sequence.
+
+### Step 1: ...
+```
+
+Use this pattern when:
+- The skill has a narrow multi-step workflow that would be too rigid for all use cases
+- The skill bundles scripts, schemas, or domain knowledge that are independently useful
+- Users might invoke the skill to leverage its context without wanting the full pipeline
+
+### Best Practices
+
+1. **Use clear, specific names** - short, memorable, easy to type
+2. **Provide argument-hint** - Help users understand what to pass
+3. **Use fork context for research** - Keeps main context clean
+4. **Whitelist tools** - Use `allowed-tools` for safety
+5. **Document in skill content** - Explain what the skill does
+6. **Use arguments for flexibility** - Make skills reusable
+7. **Test with various inputs** - Ensure argument handling works
+8. **Bundle helper scripts in `scripts/`** - Keep skills self-contained; reference via markdown links in SKILL.md
+9. **Consider a routing gate for workflow skills** - If your skill has a stepwise workflow, consider adding a routing section at the top of Instructions that lets the user's custom objective bypass the default steps while still leveraging the skill's knowledge and scripts. This makes the skill useful for a wider range of tasks without losing its default behavior (see Common Patterns #6)
+
+### Editing Skill Files
+
+Never edit files under `~/.claude/plugins/cache/` — that's a read-only installed copy.
+
+To find the editable source, first figure out what kind of repo you're in. If the CWD path or directory name contains "plugin", "skills", or "marketplace", or there's a `skills/` directory with skill folders in it, you're likely in a plugin or skills repo — search `plugins/*/skills/*/SKILL.md` and `skills/*/SKILL.md` relative to the repo root. If not found, check these fallbacks:
+
+1. **Home skills** — `~/.claude/skills/<skill-name>/SKILL.md`
+2. **Project-local skills** — `<project-root>/.claude/skills/<skill-name>/SKILL.md`
+3. **Ask the user** — If not found at the above places, ask the user where it lives. Seek guidance instead of searching further.
+
+#### After editing a skill in a marketplace plugin — version bump and push
+
+When you edit an existing skill inside a marketplace plugin repo, follow these steps after the edit:
+
+1. **Bump the plugin version** in both `plugin.json` and the corresponding `marketplace.json` entry:
+   - **Patch bump** for edits to existing components (e.g. `4.3.0` → `4.3.1`)
+   - **Minor bump** for adding a new skill, agent, or command (e.g. `4.3.0` → `4.4.0`)
+   - **Major bump** only for breaking changes, large-scale restructuring, or significant new capabilities that change the plugin's scope (e.g. `4.3.0` → `5.0.0`)
+
+2. **Push changes** — run `/push` from the repo root to commit and push.
+
+### Testing Your Skill
+
+After creating a skill, suggest the user run it on a real-world use case, then use `/session-audit` on the invocation session to identify issues and iterate on the skill's prompt.
+
+---
+
+## Your Task
+
+**Routing:** If the user's request is something other than creating a new skill (e.g. editing an existing skill, reviewing one, adding a section, refactoring) — use the reference knowledge above to achieve their objective directly. Skip the creation steps below.
+
+**User request:** $ARGUMENTS
+
+**Default — create a new skill:**
+
+1. **Determine skill purpose** - What should it do?
+2. **Choose skill name** - Follow convention (lowercase, hyphens, prefix `m-` if custom)
+3. **Design frontmatter** - Set appropriate fields
+4. **Write skill prompt** - Clear instructions for Claude
+   - If the skill has a multi-step workflow, consider whether a routing gate (see Common Patterns #6) would make it more flexible
+5. **Add argument handling** - Use `$ ARGUMENTS` or positional vars if needed
+6. **Determine placement** - Figure out whether this repo is a skills/plugin container or a real project. Check these signals:
+   - The repo/directory name or CWD path contains "plugin", "skills", or "marketplace"
+   - A `plugin.json` exists somewhere in the repo
+   - The repo has a `skills/` directory with existing skill folders in it
+
+   **If this looks like a skills/plugin repo:** Create the skill here. Find the nearest `skills/` directory relative to CWD and create inside it. If the CWD is at the repo root and there are multiple plugin directories (each with their own `skills/`), ask the user which one. If a `plugin.json` exists, use relative paths for scripts and resources (no name prefixing needed).
+
+   **If the user explicitly says "home", "personal", or "global":** Create at `~/.claude/skills/[skill-name]/SKILL.md`.
+
+   **If the user explicitly says "project" or "project skill":** Create at `<project-root>/.claude/skills/[skill-name]/SKILL.md`.
+
+   **Otherwise (regular project repo, no plugin signals):** Default to `~/.claude/skills/[skill-name]/SKILL.md`.
+
+7. **Bundle any helper scripts** - If the skill needs utilities (Python scripts, shell scripts), put them in `[skill-name]/scripts/` and reference via markdown links in SKILL.md. Use relative paths (e.g. `scripts/fetch.py`) in SKILL.md — the agent resolves them from the skill directory automatically, for both personal and plugin skills.
+8. **Provide usage example** - Show how to invoke it
+
+Ask clarifying questions if the request is ambiguous. Otherwise, proceed to create the skill.
+
+---
+
+## Post-Creation Validation
+
+After creating the skill, run this validation workflow:
+
+8. **Ask the user to test the skill** - Tell them to invoke the newly created skill (e.g., `/skill-name test-arg`) in their current session or a new one, then come back and confirm it ran.
+
+9. **Trace the invocation session** - Once the user confirms they ran it, **ask the user for the session ID** where they invoked it. This is critical because:
+   - The skill may have been invoked in a **long-running, reused session** — not a recently-created one
+   - Skills with `context: default` (no fork) run inside the existing session, so there's no new JSONL file to find
+   - The most-recently-modified JSONL is often the *current* audit session, not the invocation session
+   - Searching by recency (`ls -lt`) is unreliable — a 3-hour-old session that was reused won't be at the top
+
+   **How to get the session ID:** Tell the user to check their Claude Code status bar or run `/status` in the session where they invoked the skill. The session ID is a UUID like `01300e01-8a6c-4353-9c4d-02e5b67bd4b2`.
+
+   Once you have the session ID, construct the path:
+   ```bash
+   # The JSONL lives in the project-specific directory under ~/.claude/projects/
+   # Try both potential project path casings (macOS paths can vary)
+   SESSION_ID="<paste-session-id-here>"
+   PROJECT_DIR=$(pwd | tr '/' '-' | sed 's/^-//')
+   ls -la ~/.claude/projects/${PROJECT_DIR}/${SESSION_ID}.jsonl
+
+   # If skill used context:fork or agent, also check for subagent sessions
+   # (they'll be separate JSONL files modified around the same time)
+   ```
+
+   **Fallback if user can't provide session ID:** Search all JSONL files for the skill's `<command-name>` tag:
+   ```bash
+   grep -l "command-name.*skill-name-here" ~/.claude/projects/${PROJECT_DIR}/*.jsonl
+   ```
+   Then among matches, exclude the current session (you know your own session ID from `$CLAUDE_SESSION_ID`) and pick the one with the most recent modification time.
+
+10. **Audit the session JSONL for issues** - Read the identified session file(s) and check for ALL of the following:
+
+    **a) Errors:**
+    - Grep for `"error"`, `"Error"`, `"failed"`, `"exception"` in the JSONL
+    - Check for tool calls that returned error results
+    - Look for HTTP/API errors in tool outputs
+
+    **b) Failed attempts / retries:**
+    - Look for the same tool being called multiple times with slightly different parameters (indicates the agent had to retry)
+    - Check for sequences where a Bash command fails then gets re-run with corrections
+    - Count total tool calls vs unique tool calls — a high ratio suggests thrashing
+
+    **c) Agent self-correction:**
+    - Look for assistant messages containing phrases like "let me try", "that didn't work", "instead", "actually" — signs the agent had to course-correct mid-execution
+    - Check if the agent read files it shouldn't have needed to (indicates confusion about what context it had)
+
+    **d) Skill firing / context injection issues:**
+    - **If the skill uses "!" backtick commands**: verify the command output appears as literal text in the first assistant message's context (not as a command to be run). If the agent is *running* the command itself via Bash tool, the "!" backtick preprocessing failed.
+    - **If the skill uses `$ ARGUMENTS`**: verify the arguments were substituted as literal text, not left as `$ ARGUMENTS` or `$ 0` etc.
+    - **If the skill uses `context: fork`**: verify a separate subagent JSONL was created (the skill should NOT have run in the main session)
+    - **If the skill uses `agent: Explore` or similar**: verify the session used that agent type
+    - **If the skill uses `allowed-tools`**: verify no tool calls outside the whitelist were attempted
+
+    **e) Overall health signals:**
+    - Total turn count — if a simple skill took >10 turns, something is off
+    - Check that the skill's described purpose was actually achieved in the output
+    - Look for the agent asking the user clarifying questions (suggests the skill prompt was ambiguous)
+
+11. **Report findings** - Summarize:
+    - Whether the skill fired correctly (context injected, args substituted)
+    - Any errors or retries found
+    - Whether the skill achieved its purpose in a reasonable number of turns
+    - Specific fixes to apply to the SKILL.md if issues were found
+
+12. **Fix and re-test** - If issues were found, update the SKILL.md and ask the user to test again.

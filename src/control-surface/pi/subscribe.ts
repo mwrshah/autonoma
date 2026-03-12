@@ -1,0 +1,192 @@
+import type { BlackboardDatabase } from "../../blackboard/db.ts";
+import { touchPiEvent } from "../../blackboard/queries/pi-sessions.ts";
+import type {
+  ControlSurfaceWebSocketServerEvent,
+  MessageEndWebSocketEvent,
+  ToolExecutionEndWebSocketEvent,
+  ToolExecutionStartWebSocketEvent,
+  TurnEndWebSocketEvent,
+} from "../../contracts/index.ts";
+import type { PiSessionState } from "./session-state.ts";
+import type { WebSocketHub } from "../ws/hub.ts";
+
+type PiSessionSubscriptionEvent =
+  | {
+      type: "message_update";
+      message?: unknown;
+      assistantMessageEvent?: {
+        type?: string;
+        delta?: string;
+      };
+    }
+  | {
+      type: "message_end";
+      message?: unknown;
+    }
+  | {
+      type: "tool_execution_start";
+      toolName?: string;
+      toolCallId?: string;
+      parameters?: unknown;
+      args?: unknown;
+      [key: string]: unknown;
+    }
+  | {
+      type: "tool_execution_end";
+      toolName?: string;
+      toolCallId?: string;
+      result?: unknown;
+      isError?: boolean;
+      [key: string]: unknown;
+    }
+  | {
+      type: "turn_end" | "agent_end";
+      [key: string]: unknown;
+    }
+  | {
+      type: string;
+      [key: string]: unknown;
+    };
+
+type SubscribablePiSession = {
+  sessionId: string;
+  messages: Array<unknown>;
+  subscribe: (listener: (event: PiSessionSubscriptionEvent) => void) => () => void;
+};
+
+function broadcast(wsHub: WebSocketHub, payload: ControlSurfaceWebSocketServerEvent): void {
+  wsHub.broadcast(payload);
+}
+
+function extractMessageRole(message: unknown): "user" | "assistant" | undefined {
+  if (!message || typeof message !== "object") return undefined;
+
+  const role = (message as Record<string, unknown>).role;
+  if (role === "user" || role === "assistant") {
+    return role;
+  }
+
+  return undefined;
+}
+
+function extractMessageText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+
+  const record = message as Record<string, unknown>;
+  const directText = [record.text, record.message, record.errorMessage].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (directText) return directText;
+
+  const content = record.content;
+  if (!Array.isArray(content)) return undefined;
+
+  const parts = content
+    .flatMap((block) => {
+      if (!block || typeof block !== "object") return [];
+      const item = block as Record<string, unknown>;
+      if (item.type === "text" && typeof item.text === "string") {
+        return [item.text];
+      }
+      return [];
+    })
+    .join("");
+
+  return parts.trim().length > 0 ? parts : undefined;
+}
+
+function extractTimestamp(message: unknown, fallback: string): string {
+  if (!message || typeof message !== "object") return fallback;
+
+  const timestamp = (message as Record<string, unknown>).timestamp;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return new Date(timestamp).toISOString();
+  }
+  if (typeof timestamp === "string" && timestamp.trim()) {
+    return timestamp;
+  }
+
+  return fallback;
+}
+
+export function subscribeToPiSession(
+  session: SubscribablePiSession,
+  state: PiSessionState,
+  blackboard: BlackboardDatabase,
+  wsHub: WebSocketHub,
+): () => void {
+  return session.subscribe((event) => {
+    const now = state.noteEvent(session.messages.length);
+    const activeStatus = event.type === "turn_end" || event.type === "agent_end" ? "idle" : "active";
+    touchPiEvent(blackboard, session.sessionId, now, activeStatus);
+
+    switch (event.type) {
+      case "message_update": {
+        if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
+          broadcast(wsHub, {
+            type: "text_delta",
+            sessionId: session.sessionId,
+            delta: event.assistantMessageEvent.delta,
+          });
+        }
+        break;
+      }
+      case "message_end": {
+        const role = extractMessageRole(event.message);
+        const content = extractMessageText(event.message);
+        if (!role || !content) {
+          break;
+        }
+
+        const payload: MessageEndWebSocketEvent = {
+          type: "message_end",
+          sessionId: session.sessionId,
+          role,
+          content,
+          timestamp: extractTimestamp(event.message, now),
+        };
+        broadcast(wsHub, payload);
+        break;
+      }
+      case "tool_execution_start": {
+        const payload: ToolExecutionStartWebSocketEvent = {
+          type: "tool_execution_start",
+          sessionId: session.sessionId,
+          tool: event.toolName,
+          toolUseId: event.toolCallId,
+          args: event.args ?? event.parameters,
+          timestamp: now,
+          event,
+        };
+        broadcast(wsHub, payload);
+        break;
+      }
+      case "tool_execution_end": {
+        const payload: ToolExecutionEndWebSocketEvent = {
+          type: "tool_execution_end",
+          sessionId: session.sessionId,
+          tool: event.toolName,
+          toolUseId: event.toolCallId,
+          result: event.result,
+          isError: event.isError,
+          timestamp: now,
+          event,
+        };
+        broadcast(wsHub, payload);
+        break;
+      }
+      case "turn_end": {
+        const payload: TurnEndWebSocketEvent = {
+          type: "turn_end",
+          sessionId: session.sessionId,
+          timestamp: now,
+          event,
+        };
+        broadcast(wsHub, payload);
+        break;
+      }
+      default:
+        break;
+    }
+  });
+}

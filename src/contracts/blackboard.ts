@@ -1,0 +1,202 @@
+export const BLACKBOARD_SCHEMA_VERSION = 2;
+
+export type ClaudeSessionStatus = "working" | "idle" | "stale" | "ended";
+export type PiSessionStatus = "active" | "idle" | "ended" | "crashed";
+export type WhatsAppMessageDirection = "inbound" | "outbound";
+export type WhatsAppMessageStatus = "pending" | "sent" | "delivered" | "processed" | "failed";
+export type PendingActionStatus = "pending" | "resolved" | "expired" | "canceled";
+export type HookEventName =
+  | "SessionStart"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "PostToolUseFailure"
+  | "Stop"
+  | "SessionEnd"
+  | "SubagentStart"
+  | "SubagentStop";
+
+export type HookRouteEventName =
+  | "session-start"
+  | "pre-tool-use"
+  | "post-tool-use"
+  | "post-tool-use-failure"
+  | "stop"
+  | "session-end"
+  | "subagent-start"
+  | "subagent-stop";
+
+export const ROUTE_EVENT_TO_HOOK_EVENT: Record<HookRouteEventName, HookEventName> = {
+  "session-start": "SessionStart",
+  "pre-tool-use": "PreToolUse",
+  "post-tool-use": "PostToolUse",
+  "post-tool-use-failure": "PostToolUseFailure",
+  stop: "Stop",
+  "session-end": "SessionEnd",
+  "subagent-start": "SubagentStart",
+  "subagent-stop": "SubagentStop",
+};
+
+export interface ClaudeSessionRow {
+  session_id: string;
+  launch_id: string | null;
+  tmux_session: string | null;
+  cwd: string;
+  project: string;
+  project_label: string | null;
+  model: string | null;
+  permission_mode: string | null;
+  source: string | null;
+  status: ClaudeSessionStatus;
+  transcript_path: string | null;
+  task_description: string | null;
+  todoist_task_id: string | null;
+  agent_managed: number | boolean | null;
+  session_end_reason: string | null;
+  started_at: string;
+  ended_at: string | null;
+  last_event_at: string;
+  last_tool_started_at: string | null;
+}
+
+export interface BlackboardEventRow {
+  id: number;
+  session_id: string;
+  event_name: HookEventName;
+  tool_name: string | null;
+  tool_use_id: string | null;
+  timestamp: string;
+  payload: string | null;
+}
+
+
+export interface WhatsAppMessageRow {
+  id: number;
+  direction: WhatsAppMessageDirection;
+  wa_message_id: string | null;
+  remote_jid: string;
+  body: string;
+  context_ref: string | null;
+  status: WhatsAppMessageStatus;
+  error_message: string | null;
+  created_at: string;
+  processed_at: string | null;
+}
+
+export interface PendingActionRow {
+  action_id: string;
+  channel: string;
+  context_ref: string | null;
+  kind: string;
+  prompt_text: string;
+  related_session_id: string | null;
+  related_todoist_task_id: string | null;
+  status: PendingActionStatus;
+  created_at: string;
+  resolved_at: string | null;
+  resolution_payload: string | null;
+}
+
+export const BLACKBOARD_SCHEMA_SQL = `
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=5000;
+PRAGMA foreign_keys=ON;
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    launch_id TEXT,
+    tmux_session TEXT,
+    cwd TEXT NOT NULL,
+    project TEXT NOT NULL,
+    project_label TEXT,
+    model TEXT,
+    permission_mode TEXT,
+    source TEXT,
+    status TEXT NOT NULL DEFAULT 'working'
+      CHECK (status IN ('working', 'idle', 'stale', 'ended')),
+    transcript_path TEXT,
+    task_description TEXT,
+    todoist_task_id TEXT,
+    agent_managed BOOLEAN DEFAULT 0,
+    session_end_reason TEXT,
+    started_at DATETIME NOT NULL,
+    ended_at DATETIME,
+    last_event_at DATETIME NOT NULL,
+    last_tool_started_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES sessions(session_id),
+    event_name TEXT NOT NULL,
+    tool_name TEXT,
+    tool_use_id TEXT,
+    timestamp DATETIME NOT NULL,
+    payload TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pi_sessions (
+    pi_session_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+      CHECK (status IN ('active', 'idle', 'ended', 'crashed')),
+    runtime_instance_id TEXT,
+    pid INTEGER,
+    session_file TEXT,
+    cwd TEXT NOT NULL,
+    agent_dir TEXT,
+    model_provider TEXT,
+    model_id TEXT,
+    thinking_level TEXT,
+    started_at DATETIME NOT NULL,
+    last_prompt_at DATETIME,
+    last_event_at DATETIME NOT NULL,
+    ended_at DATETIME,
+    end_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS whatsapp_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    wa_message_id TEXT,
+    remote_jid TEXT NOT NULL,
+    body TEXT NOT NULL,
+    context_ref TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'sent', 'delivered', 'processed', 'failed')),
+    error_message TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    processed_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS pending_actions (
+    action_id TEXT PRIMARY KEY,
+    channel TEXT NOT NULL,
+    context_ref TEXT,
+    kind TEXT NOT NULL,
+    prompt_text TEXT NOT NULL,
+    related_session_id TEXT,
+    related_todoist_task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'resolved', 'expired', 'canceled')),
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    resolved_at DATETIME,
+    resolution_payload TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
+CREATE INDEX IF NOT EXISTS idx_sessions_last_event_at ON sessions(last_event_at);
+CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_session_event ON events(session_id, event_name);
+CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);
+CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_status_created ON whatsapp_messages(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_pending_actions_status_created ON pending_actions(status, created_at);
+`;

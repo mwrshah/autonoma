@@ -1,0 +1,456 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AUTONOMA_HOME="${AUTONOMA_HOME:-$HOME/.autonoma}"
+# shellcheck source=/dev/null
+source "$AUTONOMA_HOME/scripts/runtime-common.sh"
+
+COMMAND="${1:-start}"
+RUNTIME_DIR="$AUTONOMA_HOME/control-surface"
+PID_FILE="$RUNTIME_DIR/server.pid"
+LOCK_DIR="$RUNTIME_DIR/start.lock"
+LOG_FILE="$AUTONOMA_LOG_DIR/control-surface.log"
+STATE_FILE="$RUNTIME_DIR/last-start.json"
+
+ensure_layout() {
+  mkdir -p "$RUNTIME_DIR" "$AUTONOMA_LOG_DIR" "$AUTONOMA_HOME/bin" "$AUTONOMA_HOME/scripts"
+}
+
+port() {
+  control_surface_port
+}
+
+host() {
+  control_surface_host
+}
+
+token() {
+  config_string '.controlSurfaceToken' ''
+}
+
+project_root() {
+  local configured
+  configured=$(config_string '.projectRoot' '')
+  if [[ -n "$configured" ]]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+
+  configured=$(config_string '.sourceRoot' '')
+  if [[ -n "$configured" ]]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+
+  if [[ -f "$AUTONOMA_HOME/source-root" ]]; then
+    local file_root=""
+    IFS= read -r file_root < "$AUTONOMA_HOME/source-root" || true
+    printf '%s\n' "$file_root"
+  fi
+}
+
+resolve_control_surface_command() {
+  local configured="${AUTONOMA_CONTROL_SURFACE_COMMAND:-}"
+  if [[ -n "$configured" ]]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+
+  configured=$(config_string '.controlSurfaceCommand' '')
+  if [[ -n "$configured" ]]; then
+    printf '%s\n' "$configured"
+    return 0
+  fi
+
+  if [[ -x "$AUTONOMA_HOME/control-surface/start.sh" ]]; then
+    printf 'cd %q && exec %q\n' "$AUTONOMA_HOME/control-surface" "$AUTONOMA_HOME/control-surface/start.sh"
+    return 0
+  fi
+
+  if [[ -f "$AUTONOMA_HOME/control-surface/server.js" ]]; then
+    printf 'cd %q && exec node %q\n' "$AUTONOMA_HOME/control-surface" "$AUTONOMA_HOME/control-surface/server.js"
+    return 0
+  fi
+
+  local root=""
+  root=$(project_root)
+  if [[ -n "$root" ]]; then
+    if [[ -f "$root/package.json" ]] && command -v jq >/dev/null 2>&1; then
+      if jq -e '.scripts["control-surface"]? != null' "$root/package.json" >/dev/null 2>&1; then
+        printf 'cd %q && exec npm run control-surface\n' "$root"
+        return 0
+      fi
+    fi
+
+    if [[ -f "$root/dist/control-surface/server.js" ]]; then
+      printf 'cd %q && exec node %q\n' "$root" "$root/dist/control-surface/server.js"
+      return 0
+    fi
+
+    if [[ -f "$root/src/control-surface/server.ts" ]]; then
+      printf 'cd %q && exec node --experimental-strip-types %q\n' "$root" "$root/src/control-surface/server.ts"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+pid_from_file() {
+  if [[ -f "$PID_FILE" ]]; then
+    tr -d '[:space:]' < "$PID_FILE"
+  fi
+}
+
+pid_from_state_file() {
+  if [[ -f "$STATE_FILE" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null || true
+  fi
+}
+
+managed_pid() {
+  local pid=""
+  pid=$(pid_from_file || true)
+  if [[ -n "$pid" ]]; then
+    printf '%s\n' "$pid"
+    return 0
+  fi
+
+  pid=$(pid_from_state_file || true)
+  if [[ -n "$pid" ]]; then
+    printf '%s\n' "$pid"
+  fi
+}
+
+cleanup_stale_pid() {
+  local pid=""
+  pid=$(managed_pid || true)
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+
+  if is_pid_running "$pid"; then
+    return 0
+  fi
+
+  rm -f "$PID_FILE" "$STATE_FILE"
+  append_log "$LOG_FILE" "WARN" "removed stale pid metadata for pid=$pid"
+}
+
+status_body() {
+  curl_status_json "$(host)" "$(port)" 2>/dev/null || true
+}
+
+is_healthy() {
+  local body=""
+  body=$(status_body)
+  status_has_active_pi "$body"
+}
+
+acquire_lock() {
+  local waited=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    if (( waited >= 30 )); then
+      append_log "$LOG_FILE" "ERROR" "timed out waiting for startup lock"
+      return 1
+    fi
+
+    if is_healthy; then
+      return 0
+    fi
+
+    sleep 1
+    waited=$((waited + 1))
+  done
+
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+  return 0
+}
+
+write_state_file() {
+  local attempt="$1"
+  local pid="$2"
+  local command="$3"
+  if command -v jq >/dev/null 2>&1; then
+    jq -n \
+      --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg command "$command" \
+      --arg pid "$pid" \
+      --arg attempt "$attempt" \
+      '{startedAt:$started_at,command:$command,pid:($pid|tonumber),attempt:($attempt|tonumber)}' > "$STATE_FILE"
+    chmod 600 "$STATE_FILE"
+  fi
+}
+
+start_once() {
+  local command="$1"
+  rotate_log_file "$LOG_FILE"
+  append_log "$LOG_FILE" "INFO" "starting control surface"
+  nohup /bin/bash -lc "$command" >> "$LOG_FILE" 2>&1 &
+  local pid=$!
+  sleep 1
+
+  if ! is_pid_running "$pid"; then
+    append_log "$LOG_FILE" "ERROR" "control surface process exited immediately"
+    return 1
+  fi
+
+  printf '%s\n' "$pid"
+}
+
+wait_for_shutdown() {
+  local timeout_seconds="$1"
+  local pid=""
+  pid=$(managed_pid || true)
+  if [[ -z "$pid" ]]; then
+    return 0
+  fi
+
+  local deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    if ! is_pid_running "$pid"; then
+      rm -f "$PID_FILE"
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+wait_for_status_down() {
+  local timeout_seconds="$1"
+  local deadline=$((SECONDS + timeout_seconds))
+
+  while (( SECONDS < deadline )); do
+    local body=""
+    body=$(status_body)
+    if ! status_is_ok "$body"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+list_control_surface_pids() {
+  local exclude_pid="${1:-}"
+  local root=""
+  root=$(project_root)
+
+  # Build candidate patterns that identify a control-surface process
+  local -a patterns=("control-surface/server.ts" "control-surface/server.js")
+  if [[ -n "$root" ]]; then
+    patterns+=("$root/src/control-surface/server.ts" "$root/dist/control-surface/server.js")
+  fi
+
+  ps -axo pid=,command= 2>/dev/null | while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    local pid="${line%% *}"
+    local cmd="${line#* }"
+    [[ -z "$pid" || "$pid" == "$$" ]] && continue
+    [[ -n "$exclude_pid" && "$pid" == "$exclude_pid" ]] && continue
+    for pat in "${patterns[@]}"; do
+      if [[ "$cmd" == *"$pat"* ]]; then
+        printf '%s\n' "$pid"
+        break
+      fi
+    done
+  done
+}
+
+kill_orphan_control_surfaces() {
+  local exclude_pid="${1:-}"
+  local orphans=""
+  orphans=$(list_control_surface_pids "$exclude_pid")
+  [[ -z "$orphans" ]] && return 0
+
+  local pid
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    append_log "$LOG_FILE" "WARN" "killing orphan control-surface pid=$pid"
+    kill -TERM "$pid" 2>/dev/null || true
+  done <<< "$orphans"
+
+  # Wait briefly then SIGKILL any survivors
+  sleep 2
+  orphans=$(list_control_surface_pids "$exclude_pid")
+  [[ -z "$orphans" ]] && return 0
+
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if is_pid_running "$pid"; then
+      append_log "$LOG_FILE" "WARN" "force-killing orphan control-surface pid=$pid"
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+  done <<< "$orphans"
+}
+
+stop_runtime() {
+  cleanup_stale_pid
+  local current_pid=""
+  current_pid=$(managed_pid || true)
+  local current_token=""
+  current_token=$(token)
+  local current_host=""
+  current_host=$(host)
+  local current_port=""
+  current_port=$(port)
+  local current_body=""
+  current_body=$(status_body)
+  local requested_stop=false
+
+  if status_is_ok "$current_body"; then
+    local stop_code=""
+    local -a curl_args=(
+      --silent
+      --show-error
+      --output /dev/null
+      --write-out '%{http_code}'
+      --connect-timeout 1
+      --max-time 5
+      -X POST "http://${current_host}:${current_port}/stop"
+    )
+    if [[ -n "$current_token" ]]; then
+      curl_args+=(-H "Authorization: Bearer ${current_token}")
+    fi
+    stop_code=$(curl "${curl_args[@]}" 2>/dev/null || true)
+
+    if [[ "$stop_code" =~ ^2 ]]; then
+      requested_stop=true
+      append_log "$LOG_FILE" "INFO" "requested graceful shutdown via /stop"
+      wait_for_status_down 20 || true
+    elif [[ -n "$current_pid" ]] && is_pid_running "$current_pid"; then
+      append_log "$LOG_FILE" "WARN" "graceful shutdown endpoint unavailable; signalling pid=$current_pid"
+      kill -TERM "$current_pid" 2>/dev/null || true
+    fi
+  elif [[ -n "$current_pid" ]] && is_pid_running "$current_pid"; then
+    append_log "$LOG_FILE" "WARN" "control surface status unavailable; signalling pid=$current_pid"
+    kill -TERM "$current_pid" 2>/dev/null || true
+  fi
+
+  if [[ -n "$current_pid" ]] && is_pid_running "$current_pid"; then
+    if ! $requested_stop && ! wait_for_shutdown 20; then
+      append_log "$LOG_FILE" "WARN" "forcing shutdown for pid=$current_pid"
+      kill -KILL "$current_pid" 2>/dev/null || true
+      wait_for_shutdown 5 || true
+    fi
+  fi
+
+  # Kill any orphaned control-surface processes from previous starts
+  kill_orphan_control_surfaces
+
+  rm -f "$PID_FILE" "$STATE_FILE"
+  return 0
+}
+
+start_runtime() {
+  ensure_layout
+  cleanup_stale_pid
+
+  if is_healthy; then
+    local running_pid=""
+    running_pid=$(pid_from_file || true)
+    append_log "$LOG_FILE" "INFO" "control surface already healthy pid=${running_pid:-unknown}"
+    printf 'already-running\n'
+    return 0
+  fi
+
+  local existing_pid=""
+  existing_pid=$(managed_pid || true)
+  local existing_body=""
+  existing_body=$(status_body)
+  if [[ -n "$existing_pid" ]] && is_pid_running "$existing_pid"; then
+    append_log "$LOG_FILE" "WARN" "managed control surface pid=$existing_pid is unhealthy; restarting"
+    stop_runtime || true
+  elif status_is_ok "$existing_body"; then
+    append_log "$LOG_FILE" "WARN" "control surface is reachable but Pi is not active; restarting runtime"
+    stop_runtime || true
+  fi
+
+  if ! acquire_lock; then
+    return 1
+  fi
+
+  if is_healthy; then
+    printf 'already-running\n'
+    return 0
+  fi
+
+  local command=""
+  if ! command=$(resolve_control_surface_command); then
+    append_log "$LOG_FILE" "ERROR" "no control surface command configured; set .controlSurfaceCommand or AUTONOMA_CONTROL_SURFACE_COMMAND"
+    return 1
+  fi
+
+  local current_port=""
+  current_port=$(port)
+  local attempt pid
+  for attempt in 1 2 3; do
+    if pid=$(start_once "$command"); then
+      write_state_file "$attempt" "$pid" "$command"
+      if wait_for_active_pi "$(host)" "$current_port" 30; then
+        append_log "$LOG_FILE" "INFO" "control surface ready pid=$pid attempt=$attempt"
+        printf 'started\n'
+        return 0
+      fi
+
+      append_log "$LOG_FILE" "WARN" "readiness timed out pid=$pid attempt=$attempt"
+      stop_runtime || true
+    fi
+
+    if (( attempt < 3 )); then
+      sleep $((attempt * 2))
+    fi
+  done
+
+  append_log "$LOG_FILE" "ERROR" "control surface failed to start after retries"
+  return 1
+}
+
+print_status() {
+  ensure_layout
+  cleanup_stale_pid
+  local body=""
+  body=$(status_body)
+  local pid=""
+  pid=$(managed_pid || true)
+
+  if status_has_active_pi "$body"; then
+    printf 'running pid=%s healthy=true\n' "${pid:-unknown}"
+  elif [[ -n "$pid" ]] && is_pid_running "$pid"; then
+    printf 'running pid=%s healthy=false\n' "$pid"
+  else
+    printf 'stopped\n'
+  fi
+}
+
+restart_runtime() {
+  stop_runtime || true
+  start_runtime
+}
+
+main() {
+  case "$COMMAND" in
+    start)
+      start_runtime
+      ;;
+    stop)
+      stop_runtime
+      ;;
+    restart)
+      restart_runtime
+      ;;
+    status)
+      print_status
+      ;;
+    *)
+      echo "Usage: autonoma-up [start|stop|restart|status]" >&2
+      exit 1
+      ;;
+  esac
+}
+
+main

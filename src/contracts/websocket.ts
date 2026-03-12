@@ -1,0 +1,96 @@
+import type { DeliveryMode, MessageSource } from "./control-surface-api.ts";
+
+export const CONTROL_SURFACE_WS_PATH = "/ws";
+
+export interface WebSocketClientMessageEvent {
+  type: "message";
+  text: string;
+  deliveryMode?: DeliveryMode;
+}
+
+export type ControlSurfaceWebSocketClientEvent = WebSocketClientMessageEvent;
+
+export interface ConnectedWebSocketEvent {
+  type: "connected";
+  clientId: string;
+}
+
+type QueuedTurnSummary = {
+  id: string;
+  source: MessageSource;
+  text: string;
+  metadata?: Record<string, unknown>;
+  receivedAt: string;
+  webClientId?: string;
+  deliveryMode?: DeliveryMode;
+};
+
+export interface QueueItemStartWebSocketEvent {
+  type: "queue_item_start";
+  item: QueuedTurnSummary;
+}
+
+export interface QueueItemEndWebSocketEvent {
+  type: "queue_item_end";
+  itemId: string;
+  error?: string;
+}
+
+export interface MessageQueuedWebSocketEvent {
+  type: "message_queued";
+  itemId: string;
+  queueDepth: number;
+}
+
+export interface TextDeltaWebSocketEvent {
+  type: "text_delta";
+  sessionId?: string;
+  delta: string;
+}
+
+export interface MessageEndWebSocketEvent {
+  type: "message_end";
+  sessionId?: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp?: string;
+}
+
+export interface ToolExecutionStartWebSocketEvent {
+  type: "tool_execution_start";
+  sessionId?: string;
+  tool?: string;
+  toolUseId?: string;
+  args?: unknown;
+  timestamp?: string;
+  event?: unknown;
+}
+
+export interface ToolExecutionEndWebSocketEvent {
+  type: "tool_execution_end";
+  sessionId?: string;
+  tool?: string;
+  toolUseId?: string;
+  result?: unknown;
+  isError?: boolean;
+  timestamp?: string;
+  event?: unknown;
+}
+
+export interface TurnEndWebSocketEvent {
+  type: "turn_end";
+  sessionId?: string;
+  event?: unknown;
+  timestamp?: string;
+}
+
+export type ControlSurfaceWebSocketServerEvent =
+  | ConnectedWebSocketEvent
+  | QueueItemStartWebSocketEvent
+  | QueueItemEndWebSocketEvent
+  | MessageQueuedWebSocketEvent
+  | TextDeltaWebSocketEvent
+  | MessageEndWebSocketEvent
+  | ToolExecutionStartWebSocketEvent
+  | ToolExecutionEndWebSocketEvent
+  | TurnEndWebSocketEvent;
