@@ -1,41 +1,55 @@
 /// <reference types="vite/client" />
-import * as React from 'react'
-import type { QueryClient } from '@tanstack/react-query'
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
+import * as React from "react";
+import type { QueryClient } from "@tanstack/react-query";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import {
   HeadContent,
   Scripts,
   createRootRouteWithContext,
-} from '@tanstack/react-router'
-import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
-import { AppShell } from '../components/layout/AppShell'
-import { DefaultCatchBoundary } from '../components/DefaultCatchBoundary'
-import { NotFound } from '../components/NotFound'
-import { ControlSurfaceProvider } from '../hooks/use-control-surface'
-import appCss from '../styles.css?url'
-import piWebUiCss from '../pi-web-ui.css?url'
-import { seo } from '../utils/seo'
+} from "@tanstack/react-router";
+import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
+import { AppShell } from "~/components/layout/AppShell";
+import { DefaultCatchBoundary } from "~/components/DefaultCatchBoundary";
+import { NotFound } from "~/components/NotFound";
+import { ControlSurfaceProvider } from "~/hooks/use-control-surface";
+import appCss from "~/styles.css?url";
+import piWebUiCss from "~/pi-web-ui.css?url";
+import { seo } from "~/utils/seo";
 
 export const Route = createRootRouteWithContext<{
-  queryClient: QueryClient
+  queryClient: QueryClient;
 }>()({
   head: () => ({
     meta: [
-      { charSet: 'utf-8' },
-      { name: 'viewport', content: 'width=device-width, initial-scale=1' },
+      { charSet: "utf-8" },
+      { name: "viewport", content: "width=device-width, initial-scale=1" },
       ...seo({
-        title: 'Autonoma Web App',
-        description: 'TanStack Start thin client for the Autonoma control surface.',
+        title: "Autonoma",
+        description: "Orchestration layer for Claude Code.",
       }),
     ],
     links: [
-      { rel: 'stylesheet', href: appCss },
-      { rel: 'stylesheet', href: piWebUiCss },
-      { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' },
-      { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/favicon-32x32.png' },
-      { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/favicon-16x16.png' },
-      { rel: 'manifest', href: '/site.webmanifest' },
-      { rel: 'icon', href: '/favicon.ico' },
+      { rel: "stylesheet", href: appCss },
+      { rel: "stylesheet", href: piWebUiCss },
+      {
+        rel: "apple-touch-icon",
+        sizes: "180x180",
+        href: "/apple-touch-icon.png",
+      },
+      {
+        rel: "icon",
+        type: "image/png",
+        sizes: "32x32",
+        href: "/favicon-32x32.png",
+      },
+      {
+        rel: "icon",
+        type: "image/png",
+        sizes: "16x16",
+        href: "/favicon-16x16.png",
+      },
+      { rel: "manifest", href: "/site.webmanifest" },
+      { rel: "icon", href: "/favicon.ico" },
     ],
   }),
   errorComponent: (props) => (
@@ -45,7 +59,7 @@ export const Route = createRootRouteWithContext<{
   ),
   notFoundComponent: () => <NotFound />,
   component: RootComponent,
-})
+});
 
 function RootComponent() {
   return (
@@ -54,7 +68,7 @@ function RootComponent() {
         <AppShell />
       </ControlSurfaceProvider>
     </RootDocument>
-  )
+  );
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {
@@ -70,5 +84,5 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <Scripts />
       </body>
     </html>
-  )
+  );
 }

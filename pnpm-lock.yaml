@@ -23,10 +23,16 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      tailwindcss:
+        specifier: ^4.2.1
+        version: 4.2.1
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
         version: 10.0.1(eslint@10.0.3(jiti@2.6.1))
+      '@types/node':
+        specifier: ^22.19.15
+        version: 22.19.15
       eslint:
         specifier: ^10.0.3
         version: 10.0.3(jiti@2.6.1)
@@ -46,11 +52,11 @@ importers:
   web:
     dependencies:
       '@mariozechner/pi-agent-core':
-        specifier: file:../../pi-mono/packages/agent
-        version: file:../pi-mono/packages/agent(ws@8.19.0)(zod@4.3.6)
+        specifier: ^0.60.0
+        version: 0.60.0(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
-        specifier: file:../../pi-mono/packages/ai
-        version: file:../pi-mono/packages/ai(ws@8.19.0)(zod@4.3.6)
+        specifier: ^0.60.0
+        version: 0.60.0(ws@8.19.0)(zod@4.3.6)
       '@tanstack/react-query':
         specifier: ^5.90.0
         version: 5.90.21(react@19.2.4)
@@ -93,6 +99,9 @@ importers:
       remark-gfm:
         specifier: ^4.0.0
         version: 4.0.1
+      tailwindcss:
+        specifier: ^4.2.1
+        version: 4.2.1
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4.1.0
@@ -857,22 +866,17 @@ packages:
     resolution: {integrity: sha512-WXsBbkNWOObFGHkhixaT8GXJpHDd3+fn8QntYF+4R8Sa9WB90ENXWidO6b7vcKX+JX0jjO5dIsQxmzosARJKlg==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-agent-core@file:../pi-mono/packages/agent':
-    resolution: {directory: ../pi-mono/packages/agent, type: directory}
+  '@mariozechner/pi-agent-core@0.60.0':
+    resolution: {integrity: sha512-1zQcfFp8r0iwZCxCBQ9/ccFJoagns68cndLPTJJXl1ZqkYirzSld1zBOPxLAgeAKWIz3OX8dB2WQwTJFhmEojQ==}
     engines: {node: '>=20.0.0'}
-
-  '@mariozechner/pi-ai@0.56.3':
-    resolution: {integrity: sha512-l4J+cVyVeBLAlGOY/osGDvsbTz0DySCQmR171G6SdbPvIeLGhIi6siZ+zHwq91GJYjv/wtu/08M08ag2mGZKeA==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
 
   '@mariozechner/pi-ai@0.57.1':
     resolution: {integrity: sha512-Bd/J4a3YpdzJVyHLih0vDSdB0QPL4ti0XsAwtHOK/8eVhB0fHM1CpcgIrcBFJ23TMcKXMi0qamz18ERfp8tmgg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-ai@file:../pi-mono/packages/ai':
-    resolution: {directory: ../pi-mono/packages/ai, type: directory}
+  '@mariozechner/pi-ai@0.60.0':
+    resolution: {integrity: sha512-OiMuXQturnEDPmA+ho7eLe4G8plO2z21yjNMs9niQREauoblWOz7Glv58I66KPzczLED4aZTlQLTRdU6t1rz8A==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -4498,33 +4502,9 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-agent-core@file:../pi-mono/packages/agent(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-agent-core@0.60.0(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.56.3(ws@8.19.0)(zod@4.3.6)
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - aws-crt
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
-  '@mariozechner/pi-ai@0.56.3(ws@8.19.0)(zod@4.3.6)':
-    dependencies:
-      '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
-      '@aws-sdk/client-bedrock-runtime': 3.1004.0
-      '@google/genai': 1.44.0
-      '@mistralai/mistralai': 1.14.1
-      '@sinclair/typebox': 0.34.48
-      ajv: 8.18.0
-      ajv-formats: 3.0.1(ajv@8.18.0)
-      chalk: 5.6.2
-      openai: 6.26.0(ws@8.19.0)(zod@4.3.6)
-      partial-json: 0.1.7
-      proxy-agent: 6.5.0
-      undici: 7.22.0
-      zod-to-json-schema: 3.25.1(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.60.0(ws@8.19.0)(zod@4.3.6)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -4558,7 +4538,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@file:../pi-mono/packages/ai(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.60.0(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.73.0(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.1004.0

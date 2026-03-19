@@ -1,12 +1,50 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useControlSurface } from "../../hooks/use-control-surface";
-import type { SessionDetail as SessionDetailType, TmuxSessionInspection } from "../../lib/types";
-import { formatDateTime, safeJsonParse } from "../../lib/utils";
-import { Badge } from "../ui/Badge";
-import { Button } from "../ui/Button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/Card";
-import { Textarea } from "../ui/Textarea";
+import { useControlSurface } from "~/hooks/use-control-surface";
+import type {
+  SessionDetail as SessionDetailType,
+  TmuxSessionInspection,
+} from "~/lib/types";
+import { cn, formatDateTime, safeJsonParse } from "~/lib/utils";
+import { Badge } from "~/components/ui/Badge";
+import { Button } from "~/components/ui/Button";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/Card";
+
+function statusVariant(
+  status: string,
+): "success" | "default" | "warning" | "muted" {
+  switch (status) {
+    case "working":
+      return "success";
+    case "idle":
+      return "default";
+    case "stale":
+      return "warning";
+    default:
+      return "muted";
+  }
+}
+
+function MetaItem({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">
+        {label}
+      </p>
+      <p className={cn("text-sm text-foreground truncate", mono && "font-mono text-xs")}>
+        {value || "—"}
+      </p>
+    </div>
+  );
+}
 
 export function SessionDetail({
   session,
@@ -21,17 +59,21 @@ export function SessionDetail({
   const [resultMessage, setResultMessage] = useState<string | null>(null);
 
   const mutation = useMutation({
-    mutationFn: (text: string) => apiClient.sendDirectSessionMessage(session.sessionId, text),
+    mutationFn: (text: string) =>
+      apiClient.sendDirectSessionMessage(session.sessionId, text),
     onSuccess: (result) => {
       if (result.ok) {
-        void queryClient.invalidateQueries({ queryKey: ["session", session.sessionId] });
+        void queryClient.invalidateQueries({
+          queryKey: ["session", session.sessionId],
+        });
         void queryClient.invalidateQueries({ queryKey: ["sessions"] });
-        void queryClient.invalidateQueries({ queryKey: ["transcript", session.sessionId] });
+        void queryClient.invalidateQueries({
+          queryKey: ["transcript", session.sessionId],
+        });
         setResultMessage(`Delivered via ${result.delivery}.`);
         setDraft("");
         return;
       }
-
       const suffix = result.reason ? ` (${result.reason})` : "";
       setResultMessage(`Not delivered${suffix}.`);
     },
@@ -46,125 +88,170 @@ export function SessionDetail({
   }
 
   return (
-    <div className="stack gap-md">
+    <div className="space-y-4">
+      {/* Session header */}
       <Card>
         <CardHeader>
-          <div className="row row-between gap-sm wrap align-start">
-            <div>
-              <CardTitle>{session.taskDescription || session.sessionId}</CardTitle>
-              <CardDescription>{session.project}</CardDescription>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle className="text-base">
+                {session.taskDescription || session.sessionId}
+              </CardTitle>
+              {session.project && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {session.project}
+                </p>
+              )}
             </div>
-            <Badge className={`status-${session.status}`}>{session.status}</Badge>
+            <Badge variant={statusVariant(session.status)}>
+              {session.status}
+            </Badge>
           </div>
         </CardHeader>
-        <CardContent className="stack gap-md">
-          <div className="session-grid three-col">
-            <div>
-              <span className="label">Tmux session</span>
-              <div className="mono">{session.tmuxSession || "—"}</div>
-            </div>
-            <div>
-              <span className="label">Last event</span>
-              <div>{formatDateTime(session.lastEventAt)}</div>
-            </div>
-            <div>
-              <span className="label">Started</span>
-              <div>{formatDateTime(session.startedAt)}</div>
-            </div>
-            <div>
-              <span className="label">Transcript path</span>
-              <div className="truncate mono">{session.transcriptPath || "—"}</div>
-            </div>
-            <div>
-              <span className="label">CWD</span>
-              <div className="truncate mono">{session.cwd || "—"}</div>
-            </div>
-            <div>
-              <span className="label">Model</span>
-              <div>{session.model || "—"}</div>
-            </div>
-          </div>
-
-          {tmux ? (
-            <div className="stack gap-sm">
-              <div>
-                <h3 className="subheading">Tmux inspection</h3>
-                <p className="muted tiny">Extra live state returned by GET /api/sessions/:sessionId.</p>
-              </div>
-              <div className="session-grid three-col compact">
-                <div>
-                  <span className="label">Exists</span>
-                  <div>{tmux.exists ? "yes" : "no"}</div>
-                </div>
-                <div>
-                  <span className="label">Attached</span>
-                  <div>{tmux.attached ? "yes" : "no"}</div>
-                </div>
-                <div>
-                  <span className="label">Pane state</span>
-                  <div>{tmux.pane?.uiState || "—"}</div>
-                </div>
-                <div>
-                  <span className="label">Current command</span>
-                  <div className="truncate mono">{tmux.pane?.currentCommand || "—"}</div>
-                </div>
-                <div>
-                  <span className="label">Pane target</span>
-                  <div className="mono">{tmux.pane?.target || "—"}</div>
-                </div>
-                <div>
-                  <span className="label">Pane PID</span>
-                  <div>{tmux.pane?.panePid ?? "—"}</div>
-                </div>
-              </div>
-              {tmux.pane?.capture ? <pre>{tmux.pane.capture}</pre> : null}
-            </div>
-          ) : null}
-
-          <form className="stack gap-sm" onSubmit={handleSubmit}>
-            <div>
-              <h3 className="subheading">Direct session message</h3>
-              <p className="muted tiny">
-                Sends POST /sessions/:sessionId/message. The control surface decides whether tmux injection is safe.
-              </p>
-            </div>
-            <Textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              rows={3}
-              placeholder="Please continue with spec 02."
+        <CardContent>
+          <div className="grid grid-cols-3 gap-4">
+            <MetaItem label="Tmux" value={session.tmuxSession ?? ""} mono />
+            <MetaItem
+              label="Last event"
+              value={formatDateTime(session.lastEventAt)}
             />
-            <div className="row row-between gap-sm wrap align-center">
-              <div className="muted tiny">Idle sessions can inject. Busy or stale sessions fail closed.</div>
-              <Button disabled={mutation.isPending || !draft.trim()} type="submit">
-                {mutation.isPending ? "Sending…" : "Send direct message"}
+            <MetaItem
+              label="Started"
+              value={formatDateTime(session.startedAt)}
+            />
+            <MetaItem
+              label="Transcript"
+              value={session.transcriptPath ?? ""}
+              mono
+            />
+            <MetaItem label="CWD" value={session.cwd ?? ""} mono />
+            <MetaItem label="Model" value={session.model ?? ""} />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Tmux inspection */}
+      {tmux && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Tmux inspection</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 gap-4">
+              <MetaItem
+                label="Exists"
+                value={tmux.exists ? "yes" : "no"}
+              />
+              <MetaItem
+                label="Attached"
+                value={tmux.attached ? "yes" : "no"}
+              />
+              <MetaItem
+                label="Pane state"
+                value={tmux.pane?.uiState ?? ""}
+              />
+              <MetaItem
+                label="Command"
+                value={tmux.pane?.currentCommand ?? ""}
+                mono
+              />
+              <MetaItem
+                label="Target"
+                value={tmux.pane?.target ?? ""}
+                mono
+              />
+              <MetaItem
+                label="Pane PID"
+                value={tmux.pane?.panePid != null ? String(tmux.pane.panePid) : ""}
+              />
+            </div>
+            {tmux.pane?.capture && (
+              <pre className="mt-3 rounded-lg bg-background border border-border p-3 text-xs font-mono overflow-auto max-h-48">
+                {tmux.pane.capture}
+              </pre>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Direct message */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Direct message</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={2}
+              placeholder="Send a message to this session..."
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            />
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10px] text-muted-foreground/50">
+                Idle sessions can inject. Busy or stale sessions fail closed.
+              </p>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={mutation.isPending || !draft.trim()}
+              >
+                {mutation.isPending ? "Sending..." : "Send"}
               </Button>
             </div>
-            {resultMessage ? <div className="notice">{resultMessage}</div> : null}
+            {resultMessage && (
+              <p className="text-xs text-muted-foreground rounded-md bg-accent/10 px-3 py-2">
+                {resultMessage}
+              </p>
+            )}
           </form>
         </CardContent>
       </Card>
 
+      {/* Recent events */}
       <Card>
         <CardHeader>
-          <CardTitle>Recent blackboard events</CardTitle>
-          <CardDescription>Latest event rows surfaced by GET /api/sessions/:sessionId.</CardDescription>
+          <CardTitle>Recent events</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="stack gap-sm">
-            {session.recentEvents.length === 0 ? <p className="muted">No recent events.</p> : null}
+          <div className="space-y-2">
+            {session.recentEvents.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No recent events.
+              </p>
+            )}
             {session.recentEvents.map((event) => {
-              const parsed = safeJsonParse<Record<string, unknown>>(event.payload);
+              const parsed = safeJsonParse<Record<string, unknown>>(
+                event.payload,
+              );
               return (
-                <div key={event.id} className="event-row">
-                  <div className="row row-between gap-sm wrap align-center">
-                    <div className="row gap-sm wrap align-center">
-                      <strong>{event.event_name}</strong>
-                      {event.tool_name ? <Badge>{event.tool_name}</Badge> : null}
+                <div
+                  key={event.id}
+                  className="rounded-lg border border-border p-3 space-y-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">
+                        {event.event_name}
+                      </span>
+                      {event.tool_name && (
+                        <Badge variant="muted">{event.tool_name}</Badge>
+                      )}
                     </div>
-                    <span className="muted tiny">{formatDateTime(event.timestamp)}</span>
+                    <span className="text-[10px] text-muted-foreground/60">
+                      {formatDateTime(event.timestamp)}
+                    </span>
                   </div>
-                  {parsed ? <pre>{JSON.stringify(parsed, null, 2)}</pre> : event.payload ? <pre>{event.payload}</pre> : null}
+                  {parsed ? (
+                    <pre className="rounded-md bg-background border border-border p-2 text-xs font-mono overflow-auto max-h-32">
+                      {JSON.stringify(parsed, null, 2)}
+                    </pre>
+                  ) : event.payload ? (
+                    <pre className="rounded-md bg-background border border-border p-2 text-xs font-mono overflow-auto max-h-32">
+                      {event.payload}
+                    </pre>
+                  ) : null}
                 </div>
               );
             })}

@@ -1,11 +1,29 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useControlSurface } from "../../hooks/use-control-surface";
-import type { StatusResponse } from "../../lib/types";
-import { Badge } from "../ui/Badge";
-import { Button } from "../ui/Button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/Card";
+import { useControlSurface } from "~/hooks/use-control-surface";
+import type { StatusResponse } from "~/lib/types";
+import { Badge } from "~/components/ui/Badge";
+import { Button } from "~/components/ui/Button";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/Card";
 
-export function WhatsAppControls({ status }: { status?: StatusResponse }) {
+function statusVariant(
+  status: string,
+): "success" | "warning" | "muted" {
+  switch (status) {
+    case "connected":
+      return "success";
+    case "starting":
+    case "reconnecting":
+      return "warning";
+    default:
+      return "muted";
+  }
+}
+
+export function WhatsAppControls({
+  status,
+}: {
+  status?: StatusResponse;
+}) {
   const { apiClient } = useControlSurface();
   const queryClient = useQueryClient();
 
@@ -19,40 +37,76 @@ export function WhatsAppControls({ status }: { status?: StatusResponse }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["status"] }),
   });
 
-  const daemonStatus = status?.whatsapp.status ?? "unknown";
+  const waStatus = status?.whatsapp.status ?? "unknown";
 
   return (
     <Card>
       <CardHeader>
-        <div className="row row-between gap-sm wrap align-start">
-          <div>
-            <CardTitle>WhatsApp runtime</CardTitle>
-            <CardDescription>Manual auth stays terminal-driven in v1. The browser only controls runtime start/stop.</CardDescription>
-          </div>
-          <Badge>{daemonStatus}</Badge>
+        <div className="flex items-center justify-between">
+          <CardTitle>WhatsApp</CardTitle>
+          <Badge variant={statusVariant(waStatus)}>{waStatus}</Badge>
         </div>
       </CardHeader>
-      <CardContent className="stack gap-sm">
-        <div className="session-grid two-col compact">
-          <div>
-            <span className="label">Daemon PID</span>
-            <div>{status?.whatsapp.pid ?? "—"}</div>
+      <CardContent>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">
+                Daemon PID
+              </p>
+              <p className="text-sm font-mono">
+                {status?.whatsapp.pid ?? "—"}
+              </p>
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">
+                Managed by
+              </p>
+              <p className="text-sm">
+                {status?.whatsapp.managedByControlSurface
+                  ? "control surface"
+                  : "unknown"}
+              </p>
+            </div>
           </div>
-          <div>
-            <span className="label">Runtime ownership</span>
-            <div>{status?.whatsapp.managedByControlSurface ? "control surface" : "unknown"}</div>
+
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              disabled={
+                startMutation.isPending ||
+                waStatus === "connected" ||
+                waStatus === "starting"
+              }
+              onClick={() => startMutation.mutate()}
+            >
+              {startMutation.isPending ? "Starting..." : "Start"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={stopMutation.isPending || waStatus === "stopped"}
+              onClick={() => stopMutation.mutate()}
+            >
+              {stopMutation.isPending ? "Stopping..." : "Stop"}
+            </Button>
           </div>
+
+          {startMutation.error && (
+            <p className="text-xs text-destructive">
+              Failed to start daemon.
+            </p>
+          )}
+          {stopMutation.error && (
+            <p className="text-xs text-destructive">
+              Failed to stop daemon.
+            </p>
+          )}
+
+          <p className="text-[10px] text-muted-foreground/50">
+            Auth stays terminal-driven in v1. Browser only controls start/stop.
+          </p>
         </div>
-        <div className="row gap-sm wrap">
-          <Button disabled={startMutation.isPending || daemonStatus === "connected" || daemonStatus === "starting"} onClick={() => startMutation.mutate()}>
-            {startMutation.isPending ? "Starting…" : "Start daemon"}
-          </Button>
-          <Button disabled={stopMutation.isPending || daemonStatus === "stopped"} onClick={() => stopMutation.mutate()} variant="secondary">
-            {stopMutation.isPending ? "Stopping…" : "Stop daemon"}
-          </Button>
-        </div>
-        {startMutation.error ? <p className="error-text">Failed to start WhatsApp daemon.</p> : null}
-        {stopMutation.error ? <p className="error-text">Failed to stop WhatsApp daemon.</p> : null}
       </CardContent>
     </Card>
   );

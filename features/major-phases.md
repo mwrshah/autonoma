@@ -1,23 +1,26 @@
 # Autonoma — Major Phases Plan
 
-Implementation order for the current architecture:
+Implementation order for the v1 architecture:
 
 - One long-running **control surface** with an embedded **Pi** session
-- SQLite **blackboard** as shared state
-- **Cron** as idle/stale classifier and recovery loop
+- **Stateless router** (Gemini Flash Lite) classifying inbound messages against open workstreams
+- SQLite **blackboard** as shared state, including workstreams and session-to-workstream binding
 - **WhatsApp** as a transport daemon owned by app runtime
-- **Web app** as a thin localhost client
+- **Web app** as a browser client with chat, session drill-down, and transcript viewing
+- **Git worktrees** per workstream for code isolation
+- **Cron** deferred to post-v1 — Pi is reactive (human messages + hook events) until orchestration logic matures
 
 Goal: minimize rework, maximize safe parallel execution, reach usable state fastest.
 
 ## Guiding Rules
 
-1. **Build the runtime spine first.** Control surface, blackboard, and persisted Pi session are the core.
-2. **Cron is not a second orchestrator.** It classifies SQLite state, ensures the app is up when needed, and seeds one deterministic prompt only after recovery into an actionable idle/stale condition.
-3. **WhatsApp and web are clients/transports.** No orchestration layer in either.
+1. **Build the runtime spine first.** Control surface, blackboard, router, and persisted Pi session are the core.
+2. **Router is a classifier, not an orchestrator.** It reads workstreams from SQLite, classifies inbound messages, writes new workstream rows when needed, and passes everything to the single Pi with context.
+3. **WhatsApp and web are co-primary surfaces.** Both receive all Pi outputs via unified `send_to_user` tool. Bidirectional sync: replies from either surface appear on both.
 4. **Freeze interfaces before parallel work.** DB schema and control-surface API shape must stabilize early so UI/channel work proceeds safely.
 5. **Simplest workable transport in v1.** Direct Claude session messaging uses tmux injection for now.
-6. **Parallelize by interface ownership, not feature labels.** One owner per shared pathway: DB schema + migrations, control-surface HTTP/WS contracts, tmux/session adapter, transcript normalization shape. Everyone else builds against frozen contracts.
+6. **Parallelize by interface ownership, not feature labels.** One owner per shared pathway.
+7. **Cron is deferred.** Pi is reactive in v1 — triggered by human messages and Claude Code hook events. Cron recovery and proactive Todoist checking come after Pi has orchestration logic worth waking up for.
 
 ---
 
@@ -25,16 +28,20 @@ Goal: minimize rework, maximize safe parallel execution, reach usable state fast
 
 ### Ready to implement
 
-- **Blackboard** — `features/blackboard/FEATURE.md`, `features/blackboard/specs/01-blackboard/spec-blackboard.md`
-- **Control Surface** — `features/control-surface/FEATURE.md`, `features/control-surface/specs/01-server-and-pi/spec-server-and-pi.md`, `features/control-surface/specs/02-channel-routing/spec-channel-routing.md`
-- **Cron Scheduler** — `features/cron-scheduler/FEATURE.md`, `features/cron-scheduler/specs/01-cron-scheduler/spec-cron-scheduler.md`
-- **Installer** — `features/installer/FEATURE.md`, `features/installer/specs/01-installer/spec-installer.md`
-- **Web App** — `features/web-app/FEATURE.md`, `features/web-app/specs/01-web-app/spec-web-app.md`
+- **Blackboard** — `features/blackboard/FEATURE.md` + specs
+- **Control Surface** — `features/control-surface/FEATURE.md` + specs
+- **Installer** — `features/installer/FEATURE.md` + specs
+- **Web App** — `features/web-app/FEATURE.md` + specs
 
 ### Implementable with baseline already proven locally
 
-- **WhatsApp Channel** — `features/whatsapp-channel/FEATURE.md`, `features/whatsapp-channel/specs/01-whatsapp-channel/spec-whatsapp-channel.md`
+- **WhatsApp Channel** — `features/whatsapp-channel/FEATURE.md` + specs
   Baseline daemon/send/reply flow is considered proven locally. Remaining work is runtime ownership, control-surface integration, and operational hardening.
+
+### Deferred
+
+- **Cron Scheduler** — `features/cron-scheduler/FEATURE.md` + specs
+  Deferred to post-v1. Will be implemented once Pi has orchestration prompts worth running on a schedule.
 
 ---
 
@@ -42,28 +49,26 @@ Goal: minimize rework, maximize safe parallel execution, reach usable state fast
 
 ```text
 Installer
-  ├──> Blackboard
-  ├──> Cron registration (macOS + Linux)
+  ├──> Blackboard (+ workstreams table)
   └──> Runtime file deployment
 
 Blackboard
-  └──> Control Surface
-         ├──> tmux / Claude session bridge
-         ├──> Cron recovery loop
+  └──> Control Surface (+ Router)
+         ├──> tmux / Claude session bridge + git worktrees
          ├──> WhatsApp daemon ownership
-         └──> Web app thin client
+         └──> Web app client
 ```
 
 Equivalent linear reading:
 
 ```text
-Blackboard + runtime config
-  -> Control Surface core
-  -> tmux / Claude bridge
-  -> cron recovery
+Blackboard + runtime config (with workstreams)
+  -> Control Surface core + Router
+  -> tmux / Claude bridge + git worktrees
   -> WhatsApp transport integration
-  -> web app thin client
+  -> web app client
   -> hardening
+  -> (post-v1) cron recovery
 ```
 
 ---
@@ -72,111 +77,93 @@ Blackboard + runtime config
 
 ## Phase 1 — Blackboard and runtime foundation
 
-**Goal:** Build the state and config substrate everything depends on — stable SQLite schema, persisted runtime state, session/runtime lookup queries, predictable config loading.
+**Goal:** Build the state and config substrate everything depends on — stable SQLite schema with workstream tracking, persisted runtime state, session/runtime lookup queries, predictable config loading.
 
 **Scope:**
 - SQLite init + migrations
-- Blackboard schema: `sessions`, `pi_sessions`, `whatsapp_messages`, `pending_actions`
-- Control-surface hook handler behavior (session insert/update on hook events)
+- Blackboard schema: `sessions` (with `workstream_id` FK), `workstreams`, `pi_sessions`, `whatsapp_messages`, `pending_actions`
+- `workstreams` table: `id`, `name`, `repo_path` (nullable, set by Pi), `worktree_path` (nullable, set by Pi), `created_at`
+- Hook writer behavior (session insert/update on hook events)
 - Launch metadata handshake
 - Stale-reconciliation and idle-cleanup queries
 - Config loader for `~/.autonoma/config.json`
 
-**Docs:** `features/blackboard/specs/01-blackboard/spec-blackboard.md`, `features/overview.md`
-
 **Suggested modules:**
 - `src/config/load-config.ts`
 - `src/blackboard/db.ts`, `migrate.ts`, `schema.sql`
-- `src/blackboard/queries/sessions.ts` (insertSession, updateSessionStop, markSessionEnded)
-- `src/blackboard/queries/sessions.ts`, `pi-sessions.ts`
+- `src/blackboard/queries/sessions.ts`, `pi-sessions.ts`, `workstreams.ts`
 
-**Exit criteria:** Schema implemented and migratable; control-surface hook handler writes sessions correctly; `pi_sessions` queryable; control surface can safely depend on blackboard.
+**Exit criteria:** Schema implemented and migratable; workstreams table exists with session FK; hook writes durable and spec-aligned; `pi_sessions` queryable; control surface can safely depend on blackboard.
 
 ---
 
-## Phase 2 — Control Surface core runtime
+## Phase 2 — Control Surface core runtime + Router
 
-**Goal:** Bring up the real app runtime: control surface hosting the embedded Pi session.
+**Goal:** Bring up the real app runtime: control surface with embedded Pi and stateless message router.
 
 **Scope:**
 - HTTP server
+- Stateless router (Gemini Flash Lite): reads open workstreams from SQLite + `ls` of projects directory, classifies every inbound message, creates new workstream rows when needed, passes message + workstream context to Pi
 - Embedded Pi with persisted JSONL session
 - Single-turn FIFO queue
 - Pi event subscriptions
+- Pi state tracking: `active`, `idle`, `waiting_for_user`, `waiting_for_sessions`
 - `pi_sessions` mirroring
-- Routes: `/message`, `/hook/:event`, `/status`, `/stop`
+- Routes: `/message` (through router), `/hook/:event` (bypasses router), `/status`, `/stop`
+- Unified `send_to_user` tool: sends to WhatsApp + WS broadcast simultaneously
 - Runtime lifecycle handling
 - Basic custom-tool registration shells
 
-**Docs:** `features/control-surface/specs/01-server-and-pi/spec-server-and-pi.md`
-
 **Suggested modules:**
 - `src/control-surface/server.ts`, `runtime.ts`
+- `src/control-surface/router/classify.ts` (Gemini Flash Lite call)
 - `src/control-surface/pi/create-agent.ts`, `session-state.ts`, `subscribe.ts`
 - `src/control-surface/queue/turn-queue.ts`
 - `src/control-surface/routes/message.ts`, `hooks.ts`, `status.ts`, `stop.ts`
+- `src/control-surface/tools/send-to-user.ts`
 
-**Exit criteria:** Control surface starts cleanly; embedded Pi persists across restarts; queue serializes turns; `/status` reports live Pi; hook and message ingress work.
+**Exit criteria:** Control surface starts cleanly; router classifies inbound messages and manages workstream rows; embedded Pi persists across restarts; queue serializes turns; Pi state tracked; `/status` reports live Pi and open workstreams; hook and message ingress work; `send_to_user` pushes to both surfaces.
 
 ---
 
-## Phase 3 — Claude/tmux bridge and machine integrations
+## Phase 3 — Claude/tmux bridge, git worktrees, and machine integrations
 
-**Goal:** Connect runtime to real Claude Code sessions and machine-side channels.
+**Goal:** Connect runtime to real Claude Code sessions with git worktree isolation per workstream.
 
 **Scope:**
 - tmux/Claude session adapter
+- Git worktree creation per workstream (Pi writes `repo_path` and `worktree_path` back to workstream row)
+- Git worktree cleanup on workstream completion (Pi deletes worktree + workstream row)
 - Direct session messaging endpoint
-- `launch_claude_code` and `manage_session` tool behavior
+- `launch_claude_code` and `manage_session` tool behavior — sessions tagged with `workstream_id`
 - Hook forwarding alignment
 - Control-surface-side event filtering
 - Browser-facing session/transcript endpoints
 
-**Docs:** `features/control-surface/specs/02-channel-routing/spec-channel-routing.md`, `features/control-surface/specs/01-server-and-pi/spec-server-and-pi.md`
-
 **Suggested modules:**
 - `src/claude-sessions/tmux.ts`, `send-message.ts`, `launch-session.ts`
+- `src/claude-sessions/worktree.ts` (create/cleanup git worktrees)
 - `src/control-surface/routes/direct-session-message.ts`, `browser-sessions.ts`, `browser-transcript.ts`
 
 **Key v1 decision:** Direct Claude session messaging uses **tmux send-keys**, but only after an inject-safe state check; busy or ambiguous sessions fail closed.
 
-**Exit criteria:** Control surface can list/inspect Claude sessions; direct message delivery works through the inject-safe gate; browser-facing session and transcript endpoints exist; hook routing reaches control surface cleanly.
+**Exit criteria:** Control surface can list/inspect Claude sessions by workstream; git worktrees created and cleaned up with workstream lifecycle; direct message delivery works through the inject-safe gate; browser-facing session and transcript endpoints exist; hook routing reaches control surface cleanly.
 
 ---
 
-## Phase 4 — Cron recovery loop
+## Phase 4 — WhatsApp transport integration
 
-**Goal:** Self-healing — app always comes back up.
-
-**Scope:**
-- `~/.autonoma/cron/autonoma-checkin.sh`
-- `~/.autonoma/bin/autonoma-up`
-- 10-minute cross-platform scheduling
-- SQLite-backed idle/stale classification
-- Launch-if-missing, `/status` health check
-- Deterministic prompt injection after recovery for `idle-window` or `stale-window`; no-op when Pi is already active
-
-**Docs:** `features/cron-scheduler/specs/01-cron-scheduler/spec-cron-scheduler.md`
-
-**Suggested modules:** `scripts/autonoma-checkin.sh`, `scripts/autonoma-up.sh`
-
-**Exit criteria:** macOS and Linux schedules supported by installer; cron classifies Claude-session state from SQLite, exits politely when there is no actionable idle/stale condition, relaunches if missing, and sends exactly one deterministic prompt after recovery when warranted.
-
----
-
-## Phase 5 — WhatsApp transport integration
-
-**Goal:** Connect app runtime to a real outbound/inbound user channel.
+**Goal:** Connect app runtime to a real outbound/inbound user channel with bidirectional sync.
 
 **Scope:**
 - WhatsApp daemon process ownership by control surface
 - Runtime endpoints: `/runtime/whatsapp/start`, `/runtime/whatsapp/stop`
-- Control-surface tools: `send_whatsapp`, `poll_whatsapp`
-- Inbound forwarding to control surface
+- Inbound forwarding to control surface (through router)
+- Outbound via `send_to_user` tool (sends to WhatsApp + WS simultaneously)
+- Bidirectional sync: WhatsApp replies appear in web client via WS, web client replies appear in WhatsApp thread
 - Outbound/inbound blackboard flow
 - Manual auth flow (`autonoma-wa auth`)
-
-**Docs:** `features/whatsapp-channel/specs/01-whatsapp-channel/spec-whatsapp-channel.md`, `features/control-surface/specs/01-server-and-pi/spec-server-and-pi.md`
+- Web client WhatsApp health indicator (notification banner when WhatsApp disconnected)
 
 **Suggested modules:**
 - `src/whatsapp/daemon.ts`, `ipc.ts`, `auth.ts`, `send.ts`, `receive.ts`
@@ -184,23 +171,24 @@ Blackboard + runtime config
 
 **V1 UX decision:** WhatsApp auth stays **manual and terminal-driven**.
 
-**Exit criteria:** Control surface starts/stops daemon; Pi can send WhatsApp through runtime tools; inbound replies reach blackboard and control surface; manual auth documented and working.
+**Exit criteria:** Control surface starts/stops daemon; `send_to_user` delivers to WhatsApp; inbound replies reach router and then Pi; bidirectional sync working between surfaces; web client shows WhatsApp connection status; manual auth documented and working.
 
 ---
 
-## Phase 6 — Web app thin client
+## Phase 5 — Web app client
 
-**Goal:** Localhost browser surface consuming stable backend contracts.
+**Goal:** Browser client consuming stable backend contracts. Three primary views.
 
 **Scope:**
 - TanStack Start shell
 - Localhost bearer-token fetch layer
-- WS client for Pi streaming
-- Chat UI, session list/detail UI, transcript preview UI
+- WS client for Pi streaming + bidirectional message sync
+- **Chat view**: conversation with Pi, tool-event rendering
+- **Pi session drill-down**: inspect the Pi agent session state, open workstreams, Pi state transitions
+- **Claude Code session drill-down**: session list by workstream, session detail, transcript viewing
 - Direct session messaging UI
-- Runtime controls for WhatsApp daemon
-
-**Docs:** `features/web-app/specs/01-web-app/spec-web-app.md`
+- Runtime controls for WhatsApp daemon (start/stop, health status)
+- WhatsApp disconnection notification banner
 
 **Suggested modules:**
 - `web/src/lib/api.ts`, `ws.ts`
@@ -208,50 +196,77 @@ Blackboard + runtime config
 - `web/src/components/chat/ChatPanel.tsx`, `ToolEventList.tsx`
 - `web/src/components/sessions/SessionList.tsx`, `SessionDetail.tsx`, `TranscriptViewer.tsx`
 - `web/src/components/runtime/WhatsAppControls.tsx`
+- `web/src/components/workstreams/WorkstreamList.tsx`
 
-**Exit criteria:** Browser can chat with Pi, list sessions, inspect transcript previews, send direct Claude session messages, start/stop WhatsApp daemon.
+**Exit criteria:** Browser can chat with Pi, see workstream status, list sessions per workstream, inspect transcript previews, send direct Claude session messages, start/stop WhatsApp daemon, see WhatsApp health status.
 
 ---
 
-## Phase 7 — Installer, startup wrappers, and hardening
+## Phase 6 — Installer, startup wrappers, and hardening
 
 **Goal:** Clean install/start/recover/uninstall lifecycle.
 
 **Scope:**
 - Installer/uninstaller finalization
 - Runtime file deployment
-- launchd + Linux systemd user timer support
 - Startup wrapper cleanup, PID/log handling
 - Graceful shutdown
 - Transcript API normalization cleanup
 - Runtime error handling and retries
 - End-to-end install/run/recover/uninstall checks
 
-**Docs:** `features/installer/specs/01-installer/spec-installer.md` + all specs above
+**Exit criteria:** Install is idempotent; uninstall removes only Autonoma-owned modifications; startup wrapper reliable; hooks, web, and WhatsApp all converge on same control-surface Pi runtime; end-to-end smoke tests pass.
 
-**Exit criteria:** Install is idempotent; uninstall removes only Autonoma-owned modifications; startup wrapper reliable; cron, hooks, web, and WhatsApp all converge on same control-surface Pi runtime; end-to-end smoke tests pass.
+---
+
+## Deferred — Cron recovery loop (post-v1)
+
+**Goal:** Self-healing and proactive work discovery. Deferred until Pi has orchestration prompts that make periodic wake-ups valuable.
+
+**Planned scope:**
+- Cross-platform scheduling (launchd + Linux systemd user timer)
+- SQLite-backed idle/stale classification
+- Launch-if-missing, `/status` health check
+- Todoist-driven work discovery: Pi checks for pending tasks and surfaces options to the user
+- Act on Pi states: skip wake-up when `waiting_for_user`, trigger work discovery when `idle`
+- Deterministic prompt injection after recovery
+
+**Why deferred:** Without orchestration logic in Pi's prompt, cron would wake Pi with nothing to do. The proactive loop becomes valuable once Pi can check Todoist, assess workstream progress, and surface actionable options.
+
+---
+
+## Deferred — Multi-Pi orchestration (future)
+
+The v1 architecture is designed to evolve toward multiple concurrent Pi agents:
+
+- **Default agent** — always-on, handles non-workstream requests, checks Todoist, runs investigations, surfaces options
+- **Workstream orchestrators** — one Pi per active workstream, each managing its own Claude Code sessions and git worktree
+- **Router spawns orchestrators** — instead of just classifying, the router creates new Pi instances with one-time context transfer from the default agent
+- **Session lifecycle** — `active → waiting_for_user → dormant → closed` with cron-driven state transitions
+
+The v1 workstreams table, session-to-workstream FK, and router classification are the schema foundation for this evolution. The transition is a runtime change (multiple Pi processes) not a data model change.
 
 ---
 
 # Parallel Execution Strategy
 
-Phases define logical dependency order but don't execute serially. Freeze shared contracts early, assign one owner per shared pathway, let downstream teams build against those contracts.
+Phases define logical dependency order but don't execute serially. Freeze shared contracts early, assign one owner per shared pathway, let downstream work build against those contracts.
 
 ## Shared pathway owners (single-owner rule)
 
 ### Owner 1 — Data contract
-Owns: SQLite schema, migrations, blackboard query helpers, transcript normalized item shape.
+Owns: SQLite schema (including workstreams), migrations, blackboard query helpers, transcript normalized item shape.
 Freezes: DB schema, indexes, transcript preview response shape.
 
-### Owner 2 — Control-surface API
-Owns: `/status`, `/message`, `/hook/:event`, `/api/sessions`, `/api/sessions/:sessionId`, `/api/sessions/:sessionId/transcript`, `/sessions/:sessionId/message`, `/runtime/whatsapp/start`, `/runtime/whatsapp/stop`, `/ws`.
-Freezes: HTTP request/response payloads, WS event/message payloads, auth header/query-token contract.
+### Owner 2 — Control-surface API + Router
+Owns: `/status`, `/message`, `/hook/:event`, `/api/sessions`, `/api/sessions/:sessionId`, `/api/sessions/:sessionId/transcript`, `/api/workstreams`, `/sessions/:sessionId/message`, `/runtime/whatsapp/start`, `/runtime/whatsapp/stop`, `/ws`, router classification contract.
+Freezes: HTTP request/response payloads, WS event/message payloads, auth header/query-token contract, router input/output shape.
 
-### Owner 3 — Claude/tmux bridge
-Owns: tmux adapter, session launch/inject/list/kill pathways, v1 direct-message delivery contract (`tmux_send_keys`).
+### Owner 3 — Claude/tmux bridge + worktrees
+Owns: tmux adapter, session launch/inject/list/kill pathways, git worktree create/cleanup, v1 direct-message delivery contract (`tmux_send_keys`).
 
 ### Owner 4 — Runtime packaging
-Owns: `autonoma-up`, cron script shape, installer/uninstaller integration, runtime file layout under `~/.autonoma/`.
+Owns: `autonoma-up`, installer/uninstaller integration, runtime file layout under `~/.autonoma/`.
 
 ---
 
@@ -259,11 +274,11 @@ Owns: `autonoma-up`, cron script shape, installer/uninstaller integration, runti
 
 ### Wave 0 — Contract freeze sprint (small, critical, fast)
 
-The only truly serial part. 4 engineers max, 1 per shared pathway.
+The only truly serial part.
 
-**Deliverables:** DB schema + migration plan, control-surface endpoint list, WS event names, transcript normalized item shape, tmux bridge contract, runtime file layout — all frozen.
+**Deliverables:** DB schema + migration plan (including workstreams), control-surface endpoint list, WS event names, router classification contract, transcript normalized item shape, tmux bridge contract, runtime file layout — all frozen.
 
-**Exit criteria:** Everyone else can stub against these interfaces without waiting.
+**Exit criteria:** Downstream work can stub against these interfaces without waiting.
 
 ---
 
@@ -273,10 +288,10 @@ All start after Wave 0.
 
 | Track | Implements | Owns |
 |-------|-----------|------|
-| **A — Blackboard** | Phase 1: schema, migrations, query helpers, session write functions, `pi_sessions` | DB internals |
-| **B — Control-surface core** | Phase 2: persisted Pi, queue, status/message/hook/stop routes, Pi event subscriptions | HTTP server/runtime |
-| **C — Claude/tmux bridge** | Phase 3: tmux/session adapter, direct session message pathway, launch/list/inject helpers | tmux adapter internals |
-| **D — Installer/runtime packaging** | Installer skeleton, runtime file deployment, `autonoma-up` wrapper, cron registration (macOS + Linux) | Installed file layout, startup scripts |
+| **A — Blackboard** | Phase 1: schema, migrations, query helpers (sessions, pi-sessions, workstreams), hook writer | DB internals |
+| **B — Control-surface core + router** | Phase 2: router, persisted Pi, queue, Pi state tracking, routes, `send_to_user` tool, Pi event subscriptions | HTTP server/runtime/router |
+| **C — Claude/tmux bridge + worktrees** | Phase 3: tmux/session adapter, git worktree management, direct session message pathway, launch/list/inject helpers | tmux adapter + worktree internals |
+| **D — Installer/runtime packaging** | Installer skeleton, runtime file deployment, `autonoma-up` wrapper | Installed file layout, startup scripts |
 
 Safe in parallel: each track owns distinct implementation surfaces, sharing only frozen interfaces.
 
@@ -288,9 +303,8 @@ Start as soon as Wave 1 has minimal working stubs.
 
 | Track | Implements | Depends on |
 |-------|-----------|-----------|
-| **E — Cron recovery** | Phase 4: SQLite classification, health check, launch-if-missing, one deterministic idle/stale prompt after recovery | `/status`, `/message`, `autonoma-up` |
-| **F — WhatsApp runtime** | Phase 5: start/stop endpoints, tool hookup, inbound forwarding | Control-surface runtime, runtime packaging |
-| **G — Browser API + transcript** | Session list/detail routes, transcript preview, WS browser stream completion | Control-surface API, data contract |
+| **E — WhatsApp runtime** | Phase 4: start/stop endpoints, inbound routing through router, bidirectional sync, WhatsApp health reporting | Control-surface runtime, runtime packaging |
+| **F — Browser API + transcript** | Session list/detail routes (filterable by workstream), workstream endpoints, transcript preview, WS browser stream | Control-surface API, data contract |
 
 Safe in parallel: each track integrates against already-owned contracts.
 
@@ -300,9 +314,9 @@ Safe in parallel: each track integrates against already-owned contracts.
 
 | Track | Implements |
 |-------|-----------|
-| **H — Web app shell** | TanStack Start scaffold, auth token plumbing, route shell, API client, WS client |
-| **I — Web app UX** | Pi chat UI, tool-event rendering, session list/detail, direct session message UI, WhatsApp controls |
-| **J — Runtime hardening** | Retries, logging, PID cleanup, graceful shutdown, crash handling |
+| **G — Web app shell** | TanStack Start scaffold, auth token plumbing, route shell, API client, WS client |
+| **H — Web app UX** | Chat view, Pi drill-down, Claude Code session drill-down, workstream status, direct session message UI, WhatsApp controls + health indicator |
+| **I — Runtime hardening** | Retries, logging, PID cleanup, graceful shutdown, crash handling |
 
 Safe in parallel: frontend builds against stable APIs while hardening improves backend behind the same contracts.
 
@@ -312,23 +326,8 @@ Safe in parallel: frontend builds against stable APIs while hardening improves b
 
 | Track | Implements |
 |-------|-----------|
-| **K — Installer finalization** | Install/uninstall lifecycle, runtime asset deployment, launchd/systemd cleanup |
-| **L — End-to-end QA** | install -> start -> recover -> message -> stop -> uninstall; localhost browser checks; WhatsApp manual-auth smoke; transcript paging smoke |
-
----
-
-## Suggested staffing
-
-### Core owners (small group)
-1 engineer each: data contract, control-surface API, Claude/tmux bridge, runtime packaging.
-
-### Parallel execution teams
-- 1–2: blackboard implementation
-- 2: control-surface runtime
-- 1–2: cron + startup scripts
-- 1–2: WhatsApp integration
-- 2–3: web app
-- 1–2: installer/hardening/QA
+| **J — Installer finalization** | Install/uninstall lifecycle, runtime asset deployment |
+| **K — End-to-end QA** | install → start → message → route → workstream creation → session launch → session complete → notify → stop → uninstall; localhost browser checks; WhatsApp manual-auth smoke; transcript paging smoke |
 
 ---
 
@@ -337,11 +336,11 @@ Safe in parallel: frontend builds against stable APIs while hardening improves b
 | Team | Primary ownership |
 |------|------------------|
 | Data / blackboard | `src/blackboard/**`, `src/config/load-config.ts` |
-| Control surface runtime | `src/control-surface/**` (except routes owned elsewhere) |
-| Claude/tmux bridge | `src/claude-sessions/**`, `src/control-surface/routes/direct-session-message.ts` |
+| Control surface + router | `src/control-surface/**` (except routes owned elsewhere) |
+| Claude/tmux bridge + worktrees | `src/claude-sessions/**`, `src/control-surface/routes/direct-session-message.ts` |
 | WhatsApp integration | `src/whatsapp/**`, `src/control-surface/routes/runtime-whatsapp.ts` |
 | Web app | `web/src/**` |
-| Runtime packaging / installer | `scripts/**`, installer/uninstaller files, deploy/runtime asset templates |
+| Runtime packaging / installer | `scripts/**`, installer/uninstaller files |
 
 Cross-boundary contract changes go through the owner — no ad hoc edits.
 
@@ -351,36 +350,40 @@ Cross-boundary contract changes go through the owner — no ad hoc edits.
 
 Maximum throughput is **not** fully serial phases. It is:
 
-1. **Wave 0** — freeze shared contracts
-2. **Wave 1** — blackboard, control-surface core, tmux bridge, installer/runtime packaging in parallel
-3. **Wave 2** — cron, WhatsApp, browser API completion in parallel
+1. **Wave 0** — freeze shared contracts (including workstreams schema and router contract)
+2. **Wave 1** — blackboard, control-surface + router, tmux bridge + worktrees, installer/runtime packaging in parallel
+3. **Wave 2** — WhatsApp integration, browser API completion in parallel
 4. **Wave 3** — web app and hardening in parallel
 5. **Wave 4** — installer closure and end-to-end QA
 
-**Earliest useful milestone** (end of Waves 1+2): control surface alive, Pi persistent, Claude sessions reachable, cron recovery working, WhatsApp daemon runtime-owned, browser-facing session APIs available. The app is real; the web UI becomes a consumer, not a blocker.
+**Earliest useful milestone** (end of Waves 1+2): control surface alive with router classifying messages, Pi persistent and managing workstreams, Claude sessions reachable in git worktrees, WhatsApp daemon runtime-owned with bidirectional sync, browser-facing session and workstream APIs available. The app is real; the web UI becomes a consumer, not a blocker.
 
 ---
 
 # Remaining Risks
 
+- **Router classification quality** — Gemini Flash Lite may misclassify messages; no correction mechanism in v1
 - **WhatsApp reliability** — pairing, reconnect behavior, auth expiry edge cases
+- **Git worktree management** — stale worktree cleanup, branch conflicts, base branch selection
 - **Transcript normalization** — exact item/event shape, large-file chunking performance
 - **Startup wrappers** — final `autonoma-up` shape, PID ownership, stale PID cleanup
 - **WebSocket polish** — reconnect strategy, correlation IDs, multi-tab behavior
+- **Bidirectional sync edge cases** — message ordering, deduplication between surfaces
 
 ---
 
 # Summary
 
-**Canonical dependency order:**
-1. Blackboard and runtime foundation
-2. Control Surface core runtime
-3. Claude/tmux bridge and machine integrations
-4. Cron recovery loop
-5. WhatsApp transport integration
-6. Web app thin client
-7. Installer, startup wrappers, and hardening
+**Canonical v1 dependency order:**
+1. Blackboard and runtime foundation (with workstreams)
+2. Control Surface core runtime + Router
+3. Claude/tmux bridge, git worktrees, and machine integrations
+4. WhatsApp transport integration (with bidirectional sync)
+5. Web app client (three views: chat, Pi drill-down, session drill-down)
+6. Installer, startup wrappers, and hardening
+
+**Deferred to post-v1:** Cron recovery loop, multi-Pi orchestration, Skill Recursion Engine.
 
 **Execution model:** Short shared-contract freeze, then multiple parallel waves owned by interface boundaries.
 
-**Core principle:** Build the app as one persistent runtime first; attach recovery, channels, and UI around it without letting teams edit the same shared pathways simultaneously.
+**Core principle:** Build the app as one persistent runtime first (single Pi + router + workstreams); attach channels and UI around it. The workstream data model and router classification lay the foundation for multi-Pi evolution without requiring schema changes.

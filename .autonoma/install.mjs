@@ -446,7 +446,7 @@ function prepareDirectories() {
   const dirs = [
     AUTONOMA_DIR,
     join(AUTONOMA_DIR, "bin"),
-    join(AUTONOMA_DIR, "cron"),
+    ...(INSTALL_SCHEDULER ? [join(AUTONOMA_DIR, "cron")] : []),
     join(AUTONOMA_DIR, "control-surface"),
     join(AUTONOMA_DIR, "hooks"),
     join(AUTONOMA_DIR, "logs"),
@@ -541,20 +541,44 @@ async function bootstrapConfig() {
   if (!configAfter.sourceRoot) configAfter.sourceRoot = configAfter.projectRoot || projectRoot;
   if (!configAfter.controlSurfaceCommand) configAfter.controlSurfaceCommand = commandHint;
 
-  if (canonicalJson(configBefore) === canonicalJson(configAfter)) return;
+  if (canonicalJson(configBefore) !== canonicalJson(configAfter)) {
+    info("=== Runtime config changes ===");
+    console.log(showJsonDiff(configPath, configAfter));
+    info("");
 
-  info("=== Runtime config changes ===");
-  console.log(showJsonDiff(configPath, configAfter));
-  info("");
-
-  if (await confirm()) {
-    if (!DRY_RUN) {
-      writeJsonFile(configPath, configAfter, 0o600);
-      const afterHash = sha256File(configPath);
-      log(`INFO: Bootstrapped config.json before=${beforeHash} after=${afterHash}`);
+    if (await confirm()) {
+      if (!DRY_RUN) {
+        writeJsonFile(configPath, configAfter, 0o600);
+        const afterHash = sha256File(configPath);
+        log(`INFO: Bootstrapped config.json before=${beforeHash} after=${afterHash}`);
+      }
+    } else {
+      info("Skipped config bootstrap update.");
     }
-  } else {
-    info("Skipped config bootstrap update.");
+  }
+
+  // Always sync token to web/.env so the frontend can authenticate
+  syncWebEnv(configAfter);
+}
+
+function syncWebEnv(config) {
+  if (!PROJECT_ROOT) return;
+  const webEnvPath = join(PROJECT_ROOT, "web", ".env");
+  const baseUrl = `http://${config.controlSurfaceHost || "127.0.0.1"}:${config.controlSurfacePort || 18820}`;
+  const token = config.controlSurfaceToken || "";
+  const desired = `VITE_AUTONOMA_BASE_URL=${baseUrl}\nVITE_AUTONOMA_TOKEN=${token}\n`;
+
+  if (existsSync(webEnvPath)) {
+    const existing = readFileSync(webEnvPath, "utf8");
+    if (existing === desired) return;
+  }
+
+  info("=== Web app .env sync ===");
+  console.log(showTextDiff(webEnvPath, desired));
+
+  if (!DRY_RUN) {
+    writeRuntimeFile(webEnvPath, desired, 0o600);
+    info(`Wrote ${webEnvPath}`);
   }
 }
 
@@ -680,10 +704,12 @@ async function deployRuntimeFiles() {
     noteRuntimeFile(src, join(AUTONOMA_DIR, "scripts", file));
   }
 
-  for (const file of CRON_FILES) {
-    const src = resolvePackagedRuntimeFile(`cron/${file}`);
-    if (!src) continue;
-    noteRuntimeFile(src, join(AUTONOMA_DIR, "cron", file));
+  if (INSTALL_SCHEDULER) {
+    for (const file of CRON_FILES) {
+      const src = resolvePackagedRuntimeFile(`cron/${file}`);
+      if (!src) continue;
+      noteRuntimeFile(src, join(AUTONOMA_DIR, "cron", file));
+    }
   }
 
   for (const file of SOURCE_FILES) {
@@ -748,10 +774,12 @@ async function deployRuntimeFiles() {
           copyRuntimeFile(src, join(AUTONOMA_DIR, "scripts", file), 0o755);
         }
 
-        for (const file of CRON_FILES) {
-          const src = resolvePackagedRuntimeFile(`cron/${file}`);
-          if (!src) continue;
-          copyRuntimeFile(src, join(AUTONOMA_DIR, "cron", file), 0o755);
+        if (INSTALL_SCHEDULER) {
+          for (const file of CRON_FILES) {
+            const src = resolvePackagedRuntimeFile(`cron/${file}`);
+            if (!src) continue;
+            copyRuntimeFile(src, join(AUTONOMA_DIR, "cron", file), 0o755);
+          }
         }
 
         for (const file of SOURCE_FILES) {

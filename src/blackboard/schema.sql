@@ -7,6 +7,14 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at DATETIME NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS workstreams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    repo_path TEXT,
+    worktree_path TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     launch_id TEXT,
@@ -24,6 +32,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     todoist_task_id TEXT,
     agent_managed BOOLEAN DEFAULT 0,
     session_end_reason TEXT,
+    workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
     started_at DATETIME NOT NULL,
     ended_at DATETIME,
     last_event_at DATETIME NOT NULL,
@@ -34,7 +43,7 @@ CREATE TABLE IF NOT EXISTS pi_sessions (
     pi_session_id TEXT PRIMARY KEY,
     role TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active'
-      CHECK (status IN ('active', 'idle', 'ended', 'crashed')),
+      CHECK (status IN ('active', 'idle', 'waiting_for_user', 'waiting_for_sessions', 'ended', 'crashed')),
     runtime_instance_id TEXT,
     pid INTEGER,
     session_file TEXT,
@@ -82,6 +91,8 @@ CREATE TABLE IF NOT EXISTS pending_actions (
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_event_at ON sessions(last_event_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_workstream ON sessions(workstream_id);
+CREATE INDEX IF NOT EXISTS idx_workstreams_name ON workstreams(name);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);

@@ -122,7 +122,69 @@ function applyLegacyUpgrade(db: DatabaseSync): void {
     db.exec(`
       DROP TABLE IF EXISTS sessions_legacy;
       DROP TABLE IF EXISTS agents;
-      INSERT OR IGNORE INTO schema_migrations(version) VALUES (${LATEST_BLACKBOARD_SCHEMA_VERSION});
+      INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
+    `);
+
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys=ON;");
+  }
+}
+
+function applyV4Migration(db: DatabaseSync): void {
+  db.exec("PRAGMA foreign_keys=OFF;");
+  db.exec("BEGIN IMMEDIATE;");
+
+  try {
+    // Add workstreams table
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workstreams (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          repo_path TEXT,
+          worktree_path TEXT,
+          created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    // Add workstream_id column to sessions
+    db.exec("ALTER TABLE sessions ADD COLUMN workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL;");
+
+    // Recreate pi_sessions with updated status CHECK constraint
+    db.exec(`
+      CREATE TABLE pi_sessions_v4 (
+          pi_session_id TEXT PRIMARY KEY,
+          role TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'idle', 'waiting_for_user', 'waiting_for_sessions', 'ended', 'crashed')),
+          runtime_instance_id TEXT,
+          pid INTEGER,
+          session_file TEXT,
+          cwd TEXT NOT NULL,
+          agent_dir TEXT,
+          model_provider TEXT,
+          model_id TEXT,
+          thinking_level TEXT,
+          started_at DATETIME NOT NULL,
+          last_prompt_at DATETIME,
+          last_event_at DATETIME NOT NULL,
+          ended_at DATETIME,
+          end_reason TEXT
+      );
+      INSERT INTO pi_sessions_v4 SELECT * FROM pi_sessions;
+      DROP TABLE pi_sessions;
+      ALTER TABLE pi_sessions_v4 RENAME TO pi_sessions;
+
+      CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
+      CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);
+      CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_workstream ON sessions(workstream_id);
+      CREATE INDEX IF NOT EXISTS idx_workstreams_name ON workstreams(name);
+
+      INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
     `);
 
     db.exec("COMMIT;");
@@ -137,14 +199,19 @@ function applyLegacyUpgrade(db: DatabaseSync): void {
 export function migrateBlackboard(db: DatabaseSync): number {
   ensureSchemaTables(db);
 
-  const version = getSchemaVersion(db);
+  let version = getSchemaVersion(db);
   if (version === 0) {
     db.prepare("INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)").run(LATEST_BLACKBOARD_SCHEMA_VERSION);
     return LATEST_BLACKBOARD_SCHEMA_VERSION;
   }
 
-  if (version < LATEST_BLACKBOARD_SCHEMA_VERSION || hasLegacyMarkers(db)) {
+  if (hasLegacyMarkers(db)) {
     applyLegacyUpgrade(db);
+    version = getSchemaVersion(db);
+  }
+
+  if (version < 4) {
+    applyV4Migration(db);
   }
 
   return getSchemaVersion(db);

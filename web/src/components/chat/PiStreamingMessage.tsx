@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { ensurePiWebUiReady } from "../../lib/pi-web-ui-init";
+import { ensurePiWebUiReady } from "~/lib/pi-web-ui-init";
 
 export function PiStreamingMessage({
   message,

@@ -11,8 +11,8 @@ import {
   createAutonomaApiClient,
   type AutonomaApiClient,
   type ControlSurfaceSettings,
-} from "../lib/api";
-import { AutonomaWsClient } from "../lib/ws";
+} from "~/lib/api";
+import { AutonomaWsClient } from "~/lib/ws";
 
 const STORAGE_KEY = "autonoma.web.control-surface";
 
@@ -30,17 +30,22 @@ function getDefaultSettings(): ControlSurfaceSettings {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<ControlSurfaceSettings>;
       return {
-        baseUrl: parsed.baseUrl || import.meta.env.VITE_AUTONOMA_BASE_URL || "http://127.0.0.1:18820",
-        token: parsed.token || import.meta.env.VITE_AUTONOMA_TOKEN || "",
+        baseUrl:
+          parsed.baseUrl ||
+          import.meta.env.VITE_AUTONOMA_BASE_URL ||
+          "http://127.0.0.1:18820",
+        token:
+          parsed.token || import.meta.env.VITE_AUTONOMA_TOKEN || "",
         useStubFallback: parsed.useStubFallback ?? true,
       };
     }
   } catch {
-    // Ignore corrupted storage and fall back to defaults.
+    // Ignore corrupted storage.
   }
 
   return {
-    baseUrl: import.meta.env.VITE_AUTONOMA_BASE_URL || "http://127.0.0.1:18820",
+    baseUrl:
+      import.meta.env.VITE_AUTONOMA_BASE_URL || "http://127.0.0.1:18820",
     token: import.meta.env.VITE_AUTONOMA_TOKEN || "",
     useStubFallback: true,
   };
@@ -53,10 +58,13 @@ type ControlSurfaceContextValue = {
   wsClient: AutonomaWsClient;
 };
 
-const ControlSurfaceContext = createContext<ControlSurfaceContextValue | null>(null);
+const ControlSurfaceContext =
+  createContext<ControlSurfaceContextValue | null>(null);
 
 export function ControlSurfaceProvider({ children }: PropsWithChildren) {
-  const [settings, setSettings] = useState<ControlSurfaceSettings>(() => getDefaultSettings());
+  const [settings, setSettings] = useState<ControlSurfaceSettings>(
+    () => getDefaultSettings(),
+  );
   const settingsRef = useRef(settings);
   const didMountRef = useRef(false);
 
@@ -67,8 +75,14 @@ export function ControlSurfaceProvider({ children }: PropsWithChildren) {
     }
   }, [settings]);
 
-  const apiClient = useMemo(() => createAutonomaApiClient(() => settingsRef.current), []);
-  const wsClient = useMemo(() => new AutonomaWsClient(() => settingsRef.current), []);
+  const apiClient = useMemo(
+    () => createAutonomaApiClient(() => settingsRef.current),
+    [],
+  );
+  const wsClient = useMemo(
+    () => new AutonomaWsClient(() => settingsRef.current),
+    [],
+  );
 
   useEffect(() => {
     wsClient.connect();
@@ -82,27 +96,33 @@ export function ControlSurfaceProvider({ children }: PropsWithChildren) {
       didMountRef.current = true;
       return;
     }
-
     wsClient.reconnect();
   }, [settings.baseUrl, settings.token, settings.useStubFallback, wsClient]);
 
   const value = useMemo<ControlSurfaceContextValue>(
     () => ({
       settings,
-      updateSettings: (next) => setSettings((current) => ({ ...current, ...next })),
+      updateSettings: (next) =>
+        setSettings((current) => ({ ...current, ...next })),
       apiClient,
       wsClient,
     }),
     [apiClient, settings, wsClient],
   );
 
-  return <ControlSurfaceContext.Provider value={value}>{children}</ControlSurfaceContext.Provider>;
+  return (
+    <ControlSurfaceContext.Provider value={value}>
+      {children}
+    </ControlSurfaceContext.Provider>
+  );
 }
 
 export function useControlSurface(): ControlSurfaceContextValue {
   const value = useContext(ControlSurfaceContext);
   if (!value) {
-    throw new Error("useControlSurface must be used within ControlSurfaceProvider");
+    throw new Error(
+      "useControlSurface must be used within ControlSurfaceProvider",
+    );
   }
   return value;
 }

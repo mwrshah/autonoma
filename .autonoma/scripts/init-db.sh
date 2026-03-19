@@ -8,7 +8,7 @@ DB_PATH="${AUTONOMA_DB_PATH:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCHEMA_FILE=""
 CURRENT_VERSION=0
-LATEST_VERSION=3
+LATEST_VERSION=4
 
 expand_home() {
   local value="$1"
@@ -201,15 +201,80 @@ SQL
   } | sqlite3 "$DB_PATH" >/dev/null
 }
 
+apply_v4_migration() {
+  sqlite3 "$DB_PATH" >/dev/null <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=5000;
+PRAGMA foreign_keys=OFF;
+BEGIN IMMEDIATE;
+
+-- Add workstreams table
+CREATE TABLE IF NOT EXISTS workstreams (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    repo_path TEXT,
+    worktree_path TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Add workstream_id column to sessions
+ALTER TABLE sessions ADD COLUMN workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL;
+
+-- Recreate pi_sessions with updated status CHECK constraint
+CREATE TABLE pi_sessions_v4 (
+    pi_session_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active'
+      CHECK (status IN ('active', 'idle', 'waiting_for_user', 'waiting_for_sessions', 'ended', 'crashed')),
+    runtime_instance_id TEXT,
+    pid INTEGER,
+    session_file TEXT,
+    cwd TEXT NOT NULL,
+    agent_dir TEXT,
+    model_provider TEXT,
+    model_id TEXT,
+    thinking_level TEXT,
+    started_at DATETIME NOT NULL,
+    last_prompt_at DATETIME,
+    last_event_at DATETIME NOT NULL,
+    ended_at DATETIME,
+    end_reason TEXT
+);
+INSERT INTO pi_sessions_v4 SELECT * FROM pi_sessions;
+DROP TABLE pi_sessions;
+ALTER TABLE pi_sessions_v4 RENAME TO pi_sessions;
+
+-- Recreate indexes for pi_sessions
+CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);
+CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);
+
+-- New indexes
+CREATE INDEX IF NOT EXISTS idx_sessions_workstream ON sessions(workstream_id);
+CREATE INDEX IF NOT EXISTS idx_workstreams_name ON workstreams(name);
+
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (4);
+COMMIT;
+PRAGMA foreign_keys=ON;
+SQL
+}
+
 bootstrap_migrations_table
 CURRENT_VERSION="$(query_scalar "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;")"
 
 if ! has_table sessions; then
   create_fresh_schema
-elif (( CURRENT_VERSION < LATEST_VERSION )) || legacy_markers_present; then
+elif legacy_markers_present; then
   apply_legacy_upgrade
-else
-  apply_schema_file
+  CURRENT_VERSION=3
+fi
+
+# Re-read version after initial setup/legacy upgrade
+CURRENT_VERSION="$(query_scalar "SELECT COALESCE(MAX(version), 0) FROM schema_migrations;")"
+
+# Incremental migrations
+if (( CURRENT_VERSION < 4 )); then
+  apply_v4_migration
 fi
 
 echo "blackboard.db ready at ${DB_PATH} (schema v${LATEST_VERSION})"

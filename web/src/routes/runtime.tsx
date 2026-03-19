@@ -1,0 +1,135 @@
+import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useControlSurface } from "~/hooks/use-control-surface";
+import { formatDuration } from "~/lib/utils";
+import { Badge } from "~/components/ui/Badge";
+import { Button } from "~/components/ui/Button";
+import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/Card";
+import { WhatsAppControls } from "~/components/runtime/WhatsAppControls";
+
+export const Route = createFileRoute("/runtime")({
+  head: () => ({
+    meta: [{ title: "Autonoma — Runtime" }],
+  }),
+  component: RuntimePage,
+});
+
+function MetaItem({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-muted-foreground/60 mb-0.5">
+        {label}
+      </p>
+      <p
+        className={`text-sm text-foreground ${mono ? "font-mono text-xs" : ""}`}
+      >
+        {value || "—"}
+      </p>
+    </div>
+  );
+}
+
+function RuntimePage() {
+  const { apiClient } = useControlSurface();
+
+  const statusQuery = useQuery({
+    queryKey: ["status"],
+    queryFn: () => apiClient.getStatus(),
+    refetchInterval: (query) =>
+      query.state.error ? 30_000 : 5_000,
+    retry: 1,
+  });
+
+  const status = statusQuery.data;
+
+  return (
+    <div className="flex-1 overflow-auto p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-sm font-semibold text-foreground">Runtime</h1>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => statusQuery.refetch()}
+        >
+          Refresh
+        </Button>
+      </div>
+
+      {statusQuery.isPending && (
+        <p className="text-sm text-muted-foreground">Loading status...</p>
+      )}
+
+      {status && (
+        <>
+          {/* Pi Agent */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Pi Agent</CardTitle>
+                <Badge
+                  variant={status.pi?.busy ? "success" : "default"}
+                >
+                  {status.pi?.state ??
+                    (status.pi?.busy ? "active" : "idle")}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-3 gap-4">
+                <MetaItem
+                  label="Session ID"
+                  value={status.pi?.sessionId ?? ""}
+                  mono
+                />
+                <MetaItem
+                  label="Messages"
+                  value={String(status.pi?.messageCount ?? 0)}
+                />
+                <MetaItem
+                  label="Queue depth"
+                  value={String(status.pi?.queueDepth ?? 0)}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Control Surface */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Control Surface</CardTitle>
+                <Badge variant="muted">
+                  {status.source ?? "live"}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-3 gap-4">
+                <MetaItem
+                  label="PID"
+                  value={status.pid != null ? String(status.pid) : ""}
+                />
+                <MetaItem
+                  label="Uptime"
+                  value={formatDuration(status.uptime)}
+                />
+                <MetaItem label="Blackboard" value={status.blackboard} />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* WhatsApp */}
+          <WhatsAppControls status={status} />
+        </>
+      )}
+    </div>
+  );
+}

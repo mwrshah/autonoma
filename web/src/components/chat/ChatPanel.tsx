@@ -1,20 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { useControlSurface } from "../../hooks/use-control-surface";
+import { useControlSurface } from "~/hooks/use-control-surface";
 import {
   timelineToAgentMessages,
   buildStreamingAssistantMessage,
-} from "../../lib/pi-web-ui-bridge";
+} from "~/lib/pi-web-ui-bridge";
 import type {
   ChatTimelineItem,
   ChatTimelineTool,
   ConnectionState,
   DeliveryMode,
-} from "../../lib/types";
-import { createId, extractToolName } from "../../lib/utils";
-import { Badge } from "../ui/Badge";
-import { Button } from "../ui/Button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/Card";
-import { Textarea } from "../ui/Textarea";
+} from "~/lib/types";
+import { createId, extractToolName } from "~/lib/utils";
+import { Badge } from "~/components/ui/Badge";
+import { Button } from "~/components/ui/Button";
 import { PiMessageList } from "./PiMessageList";
 import { PiStreamingMessage } from "./PiStreamingMessage";
 
@@ -23,15 +21,29 @@ const initialTimeline: ChatTimelineItem[] = [];
 function connectionLabel(state: ConnectionState): string {
   switch (state) {
     case "connected":
-      return "Live WS";
+      return "Live";
     case "connecting":
       return "Connecting";
     case "reconnecting":
       return "Reconnecting";
     case "stub":
-      return "Stub stream";
+      return "Stub";
     default:
       return "Offline";
+  }
+}
+
+function connectionVariant(
+  state: ConnectionState,
+): "success" | "warning" | "muted" | "default" {
+  switch (state) {
+    case "connected":
+      return "success";
+    case "connecting":
+    case "reconnecting":
+      return "warning";
+    default:
+      return "muted";
   }
 }
 
@@ -42,26 +54,30 @@ export function ChatPanel() {
   const [draft, setDraft] = useState("");
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("followUp");
   const [timeline, setTimeline] = useState<ChatTimelineItem[]>(initialTimeline);
-  const [connectionState, setConnectionState] = useState<ConnectionState>(wsClient.connectionState);
+  const [connectionState, setConnectionState] = useState<ConnectionState>(
+    wsClient.connectionState,
+  );
   const [isSending, setIsSending] = useState(false);
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [statusPills, setStatusPills] = useState<StatusPill[]>([]);
   const activeAssistantId = useRef<string | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const addPill = (pill: StatusPill) =>
     setStatusPills((prev) => {
       const next = [...prev.filter((p) => p.id !== pill.id), pill];
-      return next.slice(-6); // keep last 6
+      return next.slice(-6);
     });
 
   const removePill = (id: string) =>
     setStatusPills((prev) => prev.filter((p) => p.id !== id));
 
-  // Convert timeline to AgentMessage format for pi-web-ui rendering
-  const agentMessages = useMemo(() => timelineToAgentMessages(timeline), [timeline]);
+  const agentMessages = useMemo(
+    () => timelineToAgentMessages(timeline),
+    [timeline],
+  );
 
-  // Build streaming message for the live assistant response
   const streamingMessage = useMemo(
     () => (streamingText ? buildStreamingAssistantMessage(streamingText) : null),
     [streamingText],
@@ -70,39 +86,42 @@ export function ChatPanel() {
   // Hydrate from history on mount
   useEffect(() => {
     let cancelled = false;
-
     void apiClient
       .getPiHistory()
       .then((history) => {
         if (cancelled) return;
-        setTimeline((current) => {
-          return [...history.items, ...current];
-        });
+        setTimeline((current) => [...history.items, ...current]);
       })
-      .catch(() => {
-        // Keep the live stream even if history hydration fails.
-      });
-
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [apiClient]);
 
-  // Subscribe to WebSocket events
+  // WebSocket events
   useEffect(() => {
     const unsubscribe = wsClient.subscribe((message) => {
       if (message.type === "connected") {
-        addPill({ id: "ws-connected", label: `WS ${message.clientId.slice(0, 8)}` });
+        addPill({
+          id: "ws-connected",
+          label: `WS ${message.clientId.slice(0, 8)}`,
+        });
         return;
       }
 
       if (message.type === "message_queued") {
-        addPill({ id: `queued-${message.itemId}`, label: `Queued (depth ${message.queueDepth})` });
+        addPill({
+          id: `queued-${message.itemId}`,
+          label: `Queued (${message.queueDepth})`,
+        });
         return;
       }
 
       if (message.type === "queue_item_start") {
-        addPill({ id: `processing-${message.item.id}`, label: `Processing ${message.item.source} turn` });
+        addPill({
+          id: `processing-${message.item.id}`,
+          label: `Processing ${message.item.source}`,
+        });
         return;
       }
 
@@ -110,7 +129,11 @@ export function ChatPanel() {
         removePill(`processing-${message.itemId}`);
         removePill(`queued-${message.itemId}`);
         if (message.error) {
-          addPill({ id: `error-${message.itemId}`, label: `Error: ${message.error}`, variant: "error" });
+          addPill({
+            id: `error-${message.itemId}`,
+            label: message.error,
+            variant: "error",
+          });
         }
         return;
       }
@@ -122,11 +145,8 @@ export function ChatPanel() {
 
       if (message.type === "message_end") {
         if (message.role !== "assistant") return;
-
-        // Finalize streaming text into a timeline message
         setStreamingText(null);
         activeAssistantId.current = null;
-
         const content = message.content || "";
         if (content.trim()) {
           setTimeline((current) => [
@@ -143,7 +163,10 @@ export function ChatPanel() {
         return;
       }
 
-      if (message.type === "tool_execution_start" || message.type === "tool_execution_end") {
+      if (
+        message.type === "tool_execution_start" ||
+        message.type === "tool_execution_end"
+      ) {
         const eventRecord =
           message.event && typeof message.event === "object"
             ? (message.event as Record<string, unknown>)
@@ -157,22 +180,24 @@ export function ChatPanel() {
           toolUseId: message.toolUseId,
           args:
             message.type === "tool_execution_start"
-              ? message.args ??
+              ? (message.args ??
                 eventRecord?.arguments ??
                 eventRecord?.args ??
-                eventRecord?.toolArguments
+                eventRecord?.toolArguments)
               : undefined,
           result:
             message.type === "tool_execution_end"
-              ? message.result ??
+              ? (message.result ??
                 eventRecord?.result ??
                 eventRecord?.output ??
-                eventRecord?.toolResult
+                eventRecord?.toolResult)
               : undefined,
-          isError: message.type === "tool_execution_end" ? message.isError : undefined,
+          isError:
+            message.type === "tool_execution_end"
+              ? message.isError
+              : undefined,
           createdAt: message.timestamp ?? new Date().toISOString(),
         };
-
         setTimeline((current) => [...current, toolEvent]);
         return;
       }
@@ -180,7 +205,6 @@ export function ChatPanel() {
       if (message.type === "turn_end") {
         setStreamingText(null);
         activeAssistantId.current = null;
-
         setTimeline((current) => [
           ...current,
           {
@@ -193,22 +217,28 @@ export function ChatPanel() {
       }
 
       if (message.type === "error") {
-        addPill({ id: createId("error"), label: message.message, variant: "error" });
+        addPill({
+          id: createId("error"),
+          label: message.message,
+          variant: "error",
+        });
       }
     });
 
-    const unsubscribeConnection = wsClient.subscribeConnection(setConnectionState);
+    const unsubscribeConnection = wsClient.subscribeConnection(
+      setConnectionState,
+    );
     return () => {
       unsubscribe();
       unsubscribeConnection();
     };
   }, [wsClient]);
 
-  // Auto-scroll when messages or streaming text change
+  // Auto-scroll
   useEffect(() => {
-    const element = viewportRef.current;
-    if (!element) return;
-    element.scrollTop = element.scrollHeight;
+    const el = viewportRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
   }, [agentMessages, streamingText]);
 
   async function handleSubmit(event: FormEvent) {
@@ -238,76 +268,101 @@ export function ChatPanel() {
         source: "web",
         deliveryMode,
       });
-
-      addPill({ id: createId("http-queued"), label: `Queued via HTTP (depth ${response.queueDepth})` });
+      addPill({
+        id: createId("http-queued"),
+        label: `Queued via HTTP (${response.queueDepth})`,
+      });
     } finally {
       setIsSending(false);
     }
   }
 
-  return (
-    <Card className="chat-panel">
-      <CardHeader>
-        <div className="row row-between gap-sm wrap align-start">
-          <div>
-            <CardTitle>Pi chat</CardTitle>
-            <CardDescription>
-              Thin-client chat over the control surface WebSocket stream.
-            </CardDescription>
-          </div>
-          <Badge>{connectionLabel(connectionState)}</Badge>
-        </div>
-      </CardHeader>
-      <CardContent className="stack gap-md">
-        {statusPills.length > 0 && (
-          <div className="row gap-xs wrap status-pills">
-            {statusPills.map((pill) => (
-              <Badge key={pill.id} className={pill.variant === "error" ? "badge-error" : "badge-muted"}>
-                {pill.label}
-              </Badge>
-            ))}
-          </div>
-        )}
-        <div ref={viewportRef} className="chat-log">
-          <PiMessageList messages={agentMessages} isStreaming={streamingText !== null} />
-          <PiStreamingMessage
-            message={streamingMessage}
-            visible={streamingText !== null}
-          />
-        </div>
+  // Ctrl+Enter to send
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      void handleSubmit(event as unknown as FormEvent);
+    }
+  }
 
-        <form className="stack gap-sm" onSubmit={handleSubmit}>
-          <div className="row gap-sm wrap align-center">
-            <label className="field-inline">
-              <span className="field-label">Delivery</span>
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-6 py-3 border-b border-border shrink-0">
+        <h1 className="text-sm font-semibold text-foreground">Pi</h1>
+        <div className="flex items-center gap-2">
+          {statusPills.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              {statusPills.map((pill) => (
+                <Badge
+                  key={pill.id}
+                  variant={pill.variant === "error" ? "error" : "muted"}
+                >
+                  {pill.label}
+                </Badge>
+              ))}
+            </div>
+          )}
+          <Badge variant={connectionVariant(connectionState)}>
+            {connectionLabel(connectionState)}
+          </Badge>
+        </div>
+      </div>
+
+      {/* Message area — fills all available space */}
+      <div
+        ref={viewportRef}
+        className="flex-1 overflow-auto px-6 py-4 space-y-3"
+      >
+        <PiMessageList
+          messages={agentMessages}
+          isStreaming={streamingText !== null}
+        />
+        <PiStreamingMessage
+          message={streamingMessage}
+          visible={streamingText !== null}
+        />
+      </div>
+
+      {/* Input area — pinned to bottom */}
+      <div className="shrink-0 border-t border-border px-6 py-3">
+        <form onSubmit={handleSubmit} className="space-y-2">
+          <div className="relative">
+            <textarea
+              ref={textareaRef}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={3}
+              placeholder="Message Pi..."
+              className="w-full rounded-lg border border-border bg-background px-4 py-3 pr-24 text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+            />
+            <div className="absolute right-2 bottom-2 flex items-center gap-2">
               <select
-                className="select"
                 value={deliveryMode}
-                onChange={(event) => setDeliveryMode(event.target.value as DeliveryMode)}
+                onChange={(e) =>
+                  setDeliveryMode(e.target.value as DeliveryMode)
+                }
+                className="text-[10px] text-muted-foreground bg-transparent border-none focus:outline-none cursor-pointer"
               >
                 <option value="followUp">followUp</option>
                 <option value="steer">steer</option>
               </select>
-            </label>
-            <p className="muted tiny">Default is followUp. Use steer only for operator overrides.</p>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSending || !draft.trim()}
+              >
+                {isSending ? "..." : "Send"}
+              </Button>
+            </div>
           </div>
-          <Textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            rows={4}
-            placeholder="Ask Pi about active sessions, transcript previews, or runtime state…"
-          />
-          <div className="row row-between gap-sm wrap align-center">
-            <p className="muted tiny">
-              Messages stream over /ws. If the socket is unavailable, the UI falls back to POST
-              /message.
-            </p>
-            <Button disabled={isSending || !draft.trim()} type="submit">
-              {isSending ? "Sending…" : "Send to Pi"}
-            </Button>
-          </div>
+          <p className="text-[10px] text-muted-foreground/50">
+            Ctrl+Enter to send. Falls back to HTTP POST if WebSocket
+            unavailable.
+          </p>
         </form>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

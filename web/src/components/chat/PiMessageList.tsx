@@ -6,7 +6,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { ensurePiWebUiReady, getPiWebUiInitError } from "../../lib/pi-web-ui-init";
+import { ensurePiWebUiReady, getPiWebUiInitError } from "~/lib/pi-web-ui-init";
 
 export function PiMessageList({
   messages,
