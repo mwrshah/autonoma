@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { getSessionDetail } from "../../blackboard/queries/sessions.ts";
+import { getSessionById } from "../../blackboard/queries/sessions.ts";
 import { inspectTmuxSession } from "../../claude-sessions/tmux.ts";
 import type {
   SessionDetailResponse,
@@ -25,7 +25,7 @@ export async function handleBrowserSessionDetailRoute(
   response: http.ServerResponse,
   sessionId: string,
 ) {
-  const session = getSessionDetail(runtime.blackboard, sessionId, 50);
+  const session = getSessionById(runtime.blackboard, sessionId);
   if (!session) {
     return sendJson(response, 404, { ok: false, error: "session not found" });
   }

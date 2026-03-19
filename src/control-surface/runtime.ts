@@ -26,9 +26,11 @@ import {
 import {
 	findIdleCleanupCandidates,
 	getSessionById,
+	insertSession,
 	listSessions,
 	markSessionEnded,
 	markStaleSessions,
+	updateSessionStop,
 } from "../blackboard/queries/sessions.ts";
 import { killTmuxSession } from "../claude-sessions/tmux.ts";
 import { readTranscriptPage } from "./transcript.ts";
@@ -50,7 +52,7 @@ type EnqueueInput = {
 	webClientId?: string;
 };
 
-const FORWARDED_HOOK_EVENTS = new Set(["session-start", "stop", "session-end"]);
+const ACCEPTED_HOOK_EVENTS = new Set(["session-start", "stop", "session-end"]);
 
 export class ControlSurfaceRuntime {
 	readonly config: AutonomaConfig;
@@ -200,24 +202,56 @@ export class ControlSurfaceRuntime {
 
 	handleHook(eventName: string, payload: Record<string, unknown>): HookResponse {
 		const normalized = eventName.toLowerCase();
-		if (!FORWARDED_HOOK_EVENTS.has(normalized)) {
+		if (!ACCEPTED_HOOK_EVENTS.has(normalized)) {
 			return { ok: true, filtered: true };
 		}
 
-		// Only forward hooks for sessions tracked in the blackboard (agent-managed).
-		// Ignore hooks from the user's own Claude Code sessions.
 		const sessionId = pickString(payload, ["session_id", "sessionId"]);
-		if (sessionId) {
-			const piSessionId = this.piSession?.sessionId;
-			const isOwnPiSession = piSessionId && sessionId === piSessionId;
+		if (!sessionId) {
+			return { ok: true, filtered: true };
+		}
+
+		const piSessionId = this.piSession?.sessionId;
+		const isOwnPiSession = piSessionId && sessionId === piSessionId;
+
+		if (normalized === "session-start") {
+			// Gate: only track sessions that declared AUTONOMA_AGENT_MANAGED=1
+			const agentManaged = payload.agent_managed === true || payload.agent_managed === 1;
+			if (!agentManaged && !isOwnPiSession) {
+				return { ok: true, filtered: true };
+			}
+			// Write session to blackboard
+			insertSession(this.blackboard, {
+				session_id: sessionId,
+				cwd: pickString(payload, ["cwd"]),
+				model: pickString(payload, ["model"]),
+				permission_mode: pickString(payload, ["permission_mode", "permissionMode"]),
+				source: pickString(payload, ["source"]),
+				transcript_path: pickString(payload, ["transcript_path", "transcriptPath"]),
+				agent_managed: agentManaged,
+				launch_id: pickString(payload, ["launch_id", "launchId", "AUTONOMA_LAUNCH_ID"]),
+				tmux_session: pickString(payload, ["tmux_session", "tmuxSession", "AUTONOMA_TMUX_SESSION"]),
+				task_description: pickString(payload, ["task_description", "taskDescription", "AUTONOMA_TASK_DESCRIPTION"]),
+				todoist_task_id: pickString(payload, ["todoist_task_id", "todoistTaskId", "AUTONOMA_TODOIST_TASK_ID"]),
+			});
+		} else {
+			// For stop/session-end, only process known sessions
 			if (!isOwnPiSession) {
 				const known = getSessionById(this.blackboard, sessionId);
 				if (!known) {
 					return { ok: true, filtered: true };
 				}
 			}
+
+			if (normalized === "stop") {
+				updateSessionStop(this.blackboard, sessionId);
+			} else if (normalized === "session-end") {
+				const reason = pickString(payload, ["reason", "stop_reason", "session_end_reason"]) || "ended";
+				markSessionEnded(this.blackboard, sessionId, reason);
+			}
 		}
 
+		// Forward to Pi agent queue
 		const text = formatHookMessage(normalized, payload);
 		const queued = this.enqueue({
 			text,

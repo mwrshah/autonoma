@@ -71,7 +71,7 @@ Autonoma needs one always-on process where Pi lives, where channels push message
 | Claude hook: SessionStart | Hook script POSTs to `/hook/session-start` | Notification that a session started, with transcript/cwd/session metadata |
 | Claude hook: Stop | Hook script POSTs to `/hook/stop` | Notification that a session paused/stopped |
 | Claude hook: SessionEnd | Hook script POSTs to `/hook/session-end` | Notification that a session ended |
-| Cron tick | launchd/crontab POSTs to `/message` | Scheduled check-in request |
+| Cron tick | launchd/systemd timer POSTs to `/message` | Scheduled check-in request |
 | Web app message | WebSocket or HTTP POST `/message` | User's typed message |
 
 ## How Pi Acts on the World
@@ -131,4 +131,4 @@ The control surface serializes all inbound prompts. Only one Pi turn runs at a t
 | `~/.autonoma/control-surface/sessions/` | Pi session JSONL |
 | `~/.autonoma/control-surface/agent/` | Pi prompt, skills, extensions, auth/models |
 | `~/.autonoma/config.json` | Port, tokens, thresholds, model config |
-| `~/.autonoma/hooks/` | Hook scripts that dual-write to blackboard and control surface |
+| `~/.autonoma/hooks/` | Hook script (`hook-post.mjs`) that POSTs to the control surface; control surface owns blackboard writes |

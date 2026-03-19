@@ -4,14 +4,15 @@ Orchestration layer above Claude Code. A long-running control surface hosts a si
 
 ## What it does
 
-An embedded Pi agent runs inside a central control surface (HTTP server). Claude Code sessions report lifecycle events via globally installed hooks that write to SQLite and POST to the control surface, so sessions started in different working directories are still tracked machine-wide. A cron scheduler runs periodically, checks the blackboard directly to classify the machine state, and only wakes Pi when there is something worth orchestrating: either the machine is in a true idle state with no active Claude work, or a Claude session looks suspiciously stale and needs Pi-led tmux verification. The user interacts via WhatsApp (primary) and a web dashboard. Pi sees all events in a single continuous session, uses custom tools plus existing skills, and decides what to do. Autonoma-managed launches have the strongest tmux control because they are tagged with tmux session metadata at launch time.
+An embedded Pi agent runs inside a central control surface (HTTP server). Claude Code sessions report lifecycle events via hooks that POST to the control surface, which gates on the `AUTONOMA_AGENT_MANAGED=1` environment variable and writes to SQLite only for managed sessions. A scheduled check-in runs periodically, checks the blackboard directly to classify the machine state, and only wakes Pi when there is something worth orchestrating: either the machine is in a true idle state with no active Claude work, or a Claude session looks suspiciously stale and needs Pi-led tmux verification. The user interacts via WhatsApp (primary) and a web dashboard. Pi sees all events in a single continuous session, uses custom tools plus existing skills, and decides what to do. Users can opt any manual session into tracking by launching with `AUTONOMA_AGENT_MANAGED=1 claude`.
 
 ## Architecture
 
 ```
 ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-│ Thin Web App │  │  Cron (tick) │  │  Hook Scripts │
-│  (browser)   │  │  (launchd)   │  │  (cc events)  │
+│ Thin Web App │  │ Scheduler    │  │  Hook Scripts │
+│  (browser)   │  │ (launchd /   │  │  (cc events)  │
+│              │  │ systemd)     │  │               │
 └──────┬───────┘  └──────┬───────┘  └──────┬────────┘
        │ WS / HTTP       │ HTTP POST       │ HTTP POST
        ▼                 ▼                 ▼
@@ -33,7 +34,7 @@ An embedded Pi agent runs inside a central control surface (HTTP server). Claude
              ▼            ▼            ▼
     ┌────────────┐ ┌──────────────┐ ┌──────────────────────┐
     │  WhatsApp  │ │  Blackboard  │ │ Claude Code (tmux)   │
-    │  Daemon    │ │   SQLite     │ │ Hook → SQLite + POST │
+    │  Daemon    │ │   SQLite     │ │ Hook → POST → SQLite │
     │ (Baileys)  │ │              │ │                      │
     └────────────┘ └──────────────┘ └──────────────────────┘
 ```
@@ -57,7 +58,7 @@ Installer → Blackboard → WhatsApp Channel ──┐
                                    (none) ──┘                   → Web App
 ```
 
-Installer configures hooks and cron entries. Blackboard needs installed hooks. WhatsApp daemon is a standalone transport that the control surface connects to. The control surface depends on the blackboard and WhatsApp daemon being available. Cron and the web app both talk to the control surface.
+Installer configures hooks and scheduler entries. Blackboard needs installed hooks. WhatsApp daemon is a standalone transport that the control surface connects to. The control surface depends on the blackboard and WhatsApp daemon being available. The scheduler and the web app both talk to the control surface.
 
 ## State Glossary
 
@@ -88,12 +89,12 @@ Notes:
 
 ## Design Principles
 
-- **Single embedded Pi**: only the control surface hosts Pi. No second Pi session in the web app or cron.
-- **Minimal footprint**: only `~/.claude/settings.json` and launchd/cron entries touched outside Autonoma's directory.
+- **Single embedded Pi**: only the control surface hosts Pi. No second Pi session in the web app or scheduler.
+- **Minimal footprint**: only `~/.claude/settings.json` and launchd/systemd entries touched outside Autonoma's directory.
 - **Uninstaller-first**: removal scripts before installation scripts.
 - **Pi is the brain**: orchestration intelligence lives in the embedded Pi session, not in disconnected wrappers.
 - **Runtime is deterministic**: hooks, queueing, DB writes, retries, and sweeps are coded behavior; Pi decides actions and messaging.
-- **Channels are transports**: WhatsApp, web app, hooks, and cron all push events into Pi.
+- **Channels are transports**: WhatsApp, web app, hooks, and scheduled check-ins all push events into Pi.
 - **Permission-gated**: Pi suggests actions, doesn't execute significant changes without user approval.
 - **Namespaced**: all Autonoma artifacts are identifiable for clean removal.
 
@@ -102,8 +103,7 @@ Notes:
 ```bash
 pnpm install
 pnpm --dir web install
-./.autonoma/init.sh
-~/.autonoma/install.sh
+node .autonoma/install.mjs
 ~/.autonoma/bin/autonoma-up start
 # optional
 pnpm --dir web dev

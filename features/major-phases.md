@@ -76,8 +76,8 @@ Blackboard + runtime config
 
 **Scope:**
 - SQLite init + migrations
-- Blackboard schema: `sessions`, `events`, `pi_sessions`, `whatsapp_messages`, `pending_actions`
-- Hook writer behavior
+- Blackboard schema: `sessions`, `pi_sessions`, `whatsapp_messages`, `pending_actions`
+- Control-surface hook handler behavior (session insert/update on hook events)
 - Launch metadata handshake
 - Stale-reconciliation and idle-cleanup queries
 - Config loader for `~/.autonoma/config.json`
@@ -87,10 +87,10 @@ Blackboard + runtime config
 **Suggested modules:**
 - `src/config/load-config.ts`
 - `src/blackboard/db.ts`, `migrate.ts`, `schema.sql`
-- `src/blackboard/writers/hook-writer.ts`, `pi-session-writer.ts`
+- `src/blackboard/queries/sessions.ts` (insertSession, updateSessionStop, markSessionEnded)
 - `src/blackboard/queries/sessions.ts`, `pi-sessions.ts`
 
-**Exit criteria:** Schema implemented and migratable; hook writes durable and spec-aligned; `pi_sessions` queryable; control surface can safely depend on blackboard.
+**Exit criteria:** Schema implemented and migratable; control-surface hook handler writes sessions correctly; `pi_sessions` queryable; control surface can safely depend on blackboard.
 
 ---
 
@@ -220,7 +220,7 @@ Blackboard + runtime config
 **Scope:**
 - Installer/uninstaller finalization
 - Runtime file deployment
-- launchd + Linux crontab support
+- launchd + Linux systemd user timer support
 - Startup wrapper cleanup, PID/log handling
 - Graceful shutdown
 - Transcript API normalization cleanup
@@ -273,7 +273,7 @@ All start after Wave 0.
 
 | Track | Implements | Owns |
 |-------|-----------|------|
-| **A — Blackboard** | Phase 1: schema, migrations, query helpers, hook writer, `pi_sessions` | DB internals |
+| **A — Blackboard** | Phase 1: schema, migrations, query helpers, session write functions, `pi_sessions` | DB internals |
 | **B — Control-surface core** | Phase 2: persisted Pi, queue, status/message/hook/stop routes, Pi event subscriptions | HTTP server/runtime |
 | **C — Claude/tmux bridge** | Phase 3: tmux/session adapter, direct session message pathway, launch/list/inject helpers | tmux adapter internals |
 | **D — Installer/runtime packaging** | Installer skeleton, runtime file deployment, `autonoma-up` wrapper, cron registration (macOS + Linux) | Installed file layout, startup scripts |
@@ -312,7 +312,7 @@ Safe in parallel: frontend builds against stable APIs while hardening improves b
 
 | Track | Implements |
 |-------|-----------|
-| **K — Installer finalization** | Install/uninstall lifecycle, runtime asset deployment, launchd/crontab cleanup |
+| **K — Installer finalization** | Install/uninstall lifecycle, runtime asset deployment, launchd/systemd cleanup |
 | **L — End-to-end QA** | install -> start -> recover -> message -> stop -> uninstall; localhost browser checks; WhatsApp manual-auth smoke; transcript paging smoke |
 
 ---

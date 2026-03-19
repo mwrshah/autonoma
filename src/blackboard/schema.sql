@@ -30,16 +30,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_tool_started_at DATETIME
 );
 
-CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL REFERENCES sessions(session_id),
-    event_name TEXT NOT NULL,
-    tool_name TEXT,
-    tool_use_id TEXT,
-    timestamp DATETIME NOT NULL,
-    payload TEXT
-);
-
 CREATE TABLE IF NOT EXISTS pi_sessions (
     pi_session_id TEXT PRIMARY KEY,
     role TEXT NOT NULL,
@@ -92,9 +82,6 @@ CREATE TABLE IF NOT EXISTS pending_actions (
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_event_at ON sessions(last_event_at);
-CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
-CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
-CREATE INDEX IF NOT EXISTS idx_events_session_event ON events(session_id, event_name);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);

@@ -57,7 +57,10 @@ function applyLegacyUpgrade(db: DatabaseSync): void {
     `);
 
     if (hasTable(db, "events")) {
-      db.exec("ALTER TABLE events RENAME TO events_legacy;");
+      db.exec("DROP TABLE events;");
+    }
+    if (hasTable(db, "events_legacy")) {
+      db.exec("DROP TABLE events_legacy;");
     }
     if (hasTable(db, "sessions")) {
       db.exec("ALTER TABLE sessions RENAME TO sessions_legacy;");
@@ -116,23 +119,7 @@ function applyLegacyUpgrade(db: DatabaseSync): void {
       `);
     }
 
-    if (hasTable(db, "events_legacy")) {
-      db.exec(`
-        INSERT INTO events (id, session_id, event_name, tool_name, tool_use_id, timestamp, payload)
-        SELECT
-          id,
-          session_id,
-          event_name,
-          tool_name,
-          tool_use_id,
-          COALESCE(timestamp, datetime('now')),
-          payload
-        FROM events_legacy
-      `);
-    }
-
     db.exec(`
-      DROP TABLE IF EXISTS events_legacy;
       DROP TABLE IF EXISTS sessions_legacy;
       DROP TABLE IF EXISTS agents;
       INSERT OR IGNORE INTO schema_migrations(version) VALUES (${LATEST_BLACKBOARD_SCHEMA_VERSION});
@@ -162,4 +149,3 @@ export function migrateBlackboard(db: DatabaseSync): number {
 
   return getSchemaVersion(db);
 }
-

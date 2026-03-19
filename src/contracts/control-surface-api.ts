@@ -1,5 +1,4 @@
 import type {
-  BlackboardEventRow,
   ClaudeSessionStatus,
 } from "./blackboard.ts";
 import type { TranscriptPageResponse } from "./transcript.ts";
@@ -63,9 +62,7 @@ export interface ClaudeSessionListItem {
   lastToolStartedAt: string | null;
 }
 
-export interface ClaudeSessionDetail extends ClaudeSessionListItem {
-  recentEvents: BlackboardEventRow[];
-}
+export type ClaudeSessionDetail = ClaudeSessionListItem;
 
 export interface StatusResponse {
   ok: true;

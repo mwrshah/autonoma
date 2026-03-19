@@ -84,13 +84,13 @@ Cron should not generate duplicate prompts just because the scheduler fired.
 ### Platform Support
 
 - **macOS:** launchd user agent
-- **Linux:** crontab entry
+- **Linux:** `systemd --user` timer
 
 Both schedule the same `~/.autonoma/cron/autonoma-checkin.sh` script.
 
 ## Dependencies
 
-- Installer (cron registration on macOS + Linux)
+- Installer (scheduler registration on macOS + Linux)
 - Control Surface (health endpoint, startup target, embedded Pi host)
 - Blackboard (runtime state visibility)
 - Todoist skill (workflow context)

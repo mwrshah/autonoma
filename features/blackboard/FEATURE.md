@@ -9,13 +9,13 @@ Multiple sessions run concurrently across tmux and worktrees. The orchestrator, 
 ## Goals
 
 1. SQLite at `~/.autonoma/blackboard.db`
-2. Claude Code hooks write lifecycle events: SessionStart, PreToolUse, PostToolUse, PostToolUseFailure, Stop, SessionEnd, SubagentStart, SubagentStop
-3. Events capture common fields (`session_id`, `transcript_path`, `cwd`, `permission_mode`) plus event-specific ones (`tool_name`, `tool_use_id`, `source`, `model`)
+2. Three Claude Code hooks (SessionStart, Stop, SessionEnd) POST to the control surface, which writes to SQLite for managed sessions only
+3. Session metadata is captured from the hook payload and `AUTONOMA_*` environment variables enriched by the hook script
 4. Autonoma-managed launches are tagged deterministically via launch metadata passed through environment variables and recorded at SessionStart
 5. WhatsApp history and reply matching live in the same database
 6. Pending user decisions are persisted so reply handling survives process restarts and Pi session compaction
 7. Active Pi runtime sessions are tracked separately from Claude Code sessions
-8. Fast queries: working, idle, stale, by project, recent events, pending messages, pending actions, active Pi sessions
+8. Fast queries: working, idle, stale, by project, pending messages, pending actions, active Pi sessions
 
 ## Schema Ownership
 
@@ -46,18 +46,6 @@ The blackboard owns the shared SQLite schema for Autonoma. Other features may wr
 | ended_at | DATETIME | SessionEnd time |
 | last_event_at | DATETIME | Latest event |
 | last_tool_started_at | DATETIME | For in-flight tool detection |
-
-### `events`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER PK | Auto-increment |
-| session_id | TEXT FK | → sessions |
-| event_name | TEXT | Hook event |
-| tool_name | TEXT | Tool name for tool events |
-| tool_use_id | TEXT | Links Pre/Post tool events |
-| timestamp | DATETIME | Event time |
-| payload | TEXT | JSON payload, truncated for noisy tool events |
 
 ### `pi_sessions`
 
@@ -113,9 +101,13 @@ Tracks embedded Pi runtime sessions separately from Claude Code sessions. `sessi
 | resolved_at | DATETIME | When action was resolved |
 | resolution_payload | TEXT | JSON with reply or chosen action |
 
-## Hook Scripts
+## Hook Flow
 
-Hooks write through a shared Python writer (`~/.autonoma/scripts/bb-write.py`) using parameterized SQL and idempotent session updates. `SessionStart` reads launch metadata from environment variables when present:
+Three hooks are installed: SessionStart, Stop, SessionEnd. Each invokes a single Node.js dispatcher (`~/.autonoma/hooks/hook-post.mjs`) that reads the Claude Code JSON payload from stdin, enriches it with `AUTONOMA_*` environment variables from the process environment, and POSTs to the control surface.
+
+The control surface gates on `AUTONOMA_AGENT_MANAGED=1` in the payload. Only managed sessions are written to SQLite. The control surface owns all blackboard writes — hooks never touch the database directly.
+
+Environment variables enriched by the hook script:
 
 - `AUTONOMA_AGENT_MANAGED=1`
 - `AUTONOMA_LAUNCH_ID`
@@ -123,7 +115,7 @@ Hooks write through a shared Python writer (`~/.autonoma/scripts/bb-write.py`) u
 - `AUTONOMA_TASK_DESCRIPTION`
 - `AUTONOMA_TODOIST_TASK_ID`
 
-This gives the blackboard a deterministic handshake between `launch_claude_code` and the first hook event.
+This gives the blackboard a deterministic handshake between `launch_claude_code` and the first hook event. Users can also opt manual sessions into tracking by launching with `AUTONOMA_AGENT_MANAGED=1 claude`.
 
 ## Staleness
 
@@ -152,6 +144,6 @@ Adding `pi_sessions` is a schema migration owned here. Existing generic `agents`
 ## Dependencies
 
 - Installer (hooks in `~/.claude/settings.json`)
-- Python 3 (shared writer)
+- Node.js (hook dispatcher)
+- Control Surface (owns all blackboard writes from hooks)
 - sqlite3 (init and ad-hoc queries)
-- jq (hook script JSON parsing)

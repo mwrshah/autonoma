@@ -1,11 +1,37 @@
 import type { BlackboardDatabase } from "../db.ts";
 import type { AutonomaConfig } from "../../config/load-config.ts";
 import type {
-  BlackboardEventRow as EventRow,
-  ClaudeSessionDetail as SessionDetail,
   ClaudeSessionListItem as SessionListItem,
   ClaudeSessionRow,
 } from "../../contracts/index.ts";
+
+export interface SessionStartPayload {
+  session_id: string;
+  cwd?: string;
+  model?: string;
+  permission_mode?: string;
+  source?: string;
+  transcript_path?: string;
+  agent_managed?: boolean;
+  launch_id?: string;
+  tmux_session?: string;
+  task_description?: string;
+  todoist_task_id?: string;
+}
+
+function textOrNull(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function nowIso(): string {
+  return new Date().toISOString().replace(/\.\d+Z$/, "Z");
+}
+
+function deriveProject(cwd: string | null | undefined): { project: string; projectLabel: string } {
+  if (!cwd) return { project: "unknown", projectLabel: "unknown" };
+  const label = cwd.split("/").filter(Boolean).pop() || cwd;
+  return { project: label, projectLabel: label };
+}
 
 type InjectionEligibility =
   | { ok: true; reason: "idle" }
@@ -76,29 +102,6 @@ export function getSessionById(db: BlackboardDatabase, sessionId: string): Sessi
   const row = db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(sessionId) as ClaudeSessionRow | undefined;
   return row ? mapSessionRow(row) : null;
 }
-
-export function getSessionDetail(db: BlackboardDatabase, sessionId: string, eventLimit = 50): SessionDetail | null {
-  const session = getSessionById(db, sessionId);
-  if (!session) {
-    return null;
-  }
-
-  const recentEvents = db
-    .prepare(
-      `SELECT id, session_id, event_name, tool_name, tool_use_id, timestamp, payload
-       FROM events
-       WHERE session_id = ?
-       ORDER BY timestamp DESC
-       LIMIT ?`,
-    )
-    .all(sessionId, eventLimit) as EventRow[];
-
-  return {
-    ...session,
-    recentEvents,
-  };
-}
-
 
 export function getSessionByTmuxSession(db: BlackboardDatabase, tmuxSession: string): SessionListItem | null {
   const row = db
@@ -228,5 +231,68 @@ export function markSessionEnded(
          last_tool_started_at = NULL
      WHERE session_id = ?`,
   ).run(reason, endedAt, endedAt, sessionId);
+}
+
+export function insertSession(db: BlackboardDatabase, payload: SessionStartPayload): void {
+  const ts = nowIso();
+  const cwd = textOrNull(payload.cwd) || ".";
+  const { project, projectLabel } = deriveProject(cwd);
+
+  db.prepare(
+    `INSERT INTO sessions (
+       session_id, launch_id, tmux_session, cwd, project, project_label,
+       model, permission_mode, source, status, transcript_path,
+       task_description, todoist_task_id, agent_managed, started_at, last_event_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(session_id) DO UPDATE SET
+       launch_id = COALESCE(excluded.launch_id, sessions.launch_id),
+       tmux_session = COALESCE(excluded.tmux_session, sessions.tmux_session),
+       cwd = excluded.cwd,
+       project = excluded.project,
+       project_label = excluded.project_label,
+       model = COALESCE(excluded.model, sessions.model),
+       permission_mode = COALESCE(excluded.permission_mode, sessions.permission_mode),
+       source = COALESCE(excluded.source, sessions.source),
+       status = 'working',
+       transcript_path = COALESCE(excluded.transcript_path, sessions.transcript_path),
+       task_description = COALESCE(excluded.task_description, sessions.task_description),
+       todoist_task_id = COALESCE(excluded.todoist_task_id, sessions.todoist_task_id),
+       agent_managed = CASE
+         WHEN excluded.agent_managed IS NOT NULL THEN excluded.agent_managed
+         ELSE sessions.agent_managed
+       END,
+       started_at = MIN(sessions.started_at, excluded.started_at),
+       last_event_at = MAX(sessions.last_event_at, excluded.last_event_at)`,
+  ).run(
+    payload.session_id,
+    textOrNull(payload.launch_id),
+    textOrNull(payload.tmux_session),
+    cwd,
+    project,
+    projectLabel,
+    textOrNull(payload.model),
+    textOrNull(payload.permission_mode),
+    textOrNull(payload.source),
+    textOrNull(payload.transcript_path),
+    textOrNull(payload.task_description),
+    textOrNull(payload.todoist_task_id),
+    payload.agent_managed ? 1 : 0,
+    ts,
+    ts,
+  );
+}
+
+export function updateSessionStop(db: BlackboardDatabase, sessionId: string): void {
+  const ts = nowIso();
+  db.prepare(
+    `UPDATE sessions
+     SET last_event_at = MAX(last_event_at, ?),
+         status = CASE
+           WHEN status = 'ended' THEN status
+           WHEN ? >= last_event_at THEN 'idle'
+           ELSE status
+         END
+     WHERE session_id = ?`,
+  ).run(ts, ts, sessionId);
 }
 

@@ -11,7 +11,7 @@
     "audit:ts": "eslint \"src/**/*.ts\" \"web/src/**/*.{ts,tsx}\" && knip --config knip.json --include files,dependencies,unlisted --exclude binaries --no-config-hints && knip --directory web --config knip.json --include files,dependencies,unlisted --exclude binaries --no-config-hints",
     "audit:ts:fix": "eslint --fix \"src/**/*.ts\" \"web/src/**/*.{ts,tsx}\" && pnpm run audit:ts",
     "audit:py": "uv run ruff check .autonoma/scripts && uv run vulture .autonoma/scripts --min-confidence 100",
-    "audit:shell": "find .autonoma -type f \\( -name '*.sh' -o -path '.autonoma/bin/autonoma-up' -o -path '.autonoma/bin/autonoma-wa' \\) -print0 | xargs -0 -n1 bash -n"
+    "audit:shell": "find .autonoma -type f \\( -name '*.sh' -o -path '.autonoma/bin/autonoma-up' -o -path '.autonoma/bin/autonoma-wa' \\) -print0 | xargs -0 -n1 bash -n && node --check .autonoma/install.mjs && node --check .autonoma/uninstall.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

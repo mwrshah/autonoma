@@ -18,7 +18,7 @@ Autonoma is not one monolith. It is a small group of cooperating parts:
 | Claude/tmux bridge | Launches Claude Code sessions, inspects tmux, sends direct messages safely. | TypeScript / Node.js + tmux | No separate daemon | `src/claude-sessions/**` |
 | WhatsApp daemon | Separate process that maintains the WhatsApp connection and local IPC. Owned by the control surface at runtime. | TypeScript / Node.js | Yes | `src/whatsapp/**` |
 | Web app | Thin browser client talking to the control surface over HTTP + WebSocket. | TypeScript / React / TanStack Start | Separate dev server in development | `web/**` |
-| Hooks / cron / wrappers | Installed machine-side entrypoints. Hook shell scripts are thin wrappers around a Python dispatcher that writes blackboard state and forwards to the control surface. Cron wakes the system. Wrappers start/stop the runtime. | Bash wrappers + Python helpers | Hooks: no. Cron: scheduled. Wrappers: on demand. | `.autonoma/**` |
+| Hooks / cron / wrappers | Installed machine-side entrypoints. Hook events POST to the control surface via a Node.js dispatcher. Cron wakes the system. Wrappers start/stop the runtime. | Node.js + Bash wrappers | Hooks: no. Cron: scheduled. Wrappers: on demand. | `.autonoma/**` |
 
 ## Important architecture facts
 
@@ -28,8 +28,8 @@ Autonoma is not one monolith. It is a small group of cooperating parts:
 - **tmux is required**. Autonoma does not bundle tmux.
 - **Claude Code CLI is required**. Autonoma does not bundle it.
 - **`projectRoot` / `sourceRoot` mean the Autonoma source checkout**, i.e. the repo used to run the control surface and WhatsApp code. They are **not** the working directory for Claude sessions.
-- **Claude Code session tracking is machine-wide through hooks**. If the global Claude hooks are installed, sessions started in other directories are still recorded with their own `cwd` values. Direct tmux control is strongest for Autonoma-launched sessions because those are tagged with a tmux session name.
-- **Python is only used for small helper scripts** under `.autonoma/scripts/`; there is no Python service architecture here.
+- **Claude Code session tracking is gated by `AUTONOMA_AGENT_MANAGED=1`**. Only sessions launched with this env var (set automatically by the `launch_claude_code` tool, or manually by the user) are tracked in the blackboard. Unmanaged sessions are silently filtered at the control surface. You can opt any manual session into tracking by launching it with `AUTONOMA_AGENT_MANAGED=1 claude`.
+- **The installer and hooks are Node.js** (`.mjs` files using only `node:*` built-in modules). No `jq` dependency.
 
 ## Current repo status
 
@@ -57,9 +57,7 @@ Install these before trying to run Autonoma.
 - **pnpm**
 - **tmux**
 - **Claude Code CLI** available as `claude`
-- **jq**
 - **sqlite3**
-- **python3**
 
 ## Required for WhatsApp
 
@@ -78,9 +76,7 @@ node -v
 pnpm -v
 tmux -V
 claude --version
-jq --version
 sqlite3 --version
-python3 --version
 ```
 
 If any of these are missing, fix that first.
@@ -100,9 +96,8 @@ If any of these are missing, fix that first.
 
 ## Installed runtime assets
 
-- `.autonoma/install.sh`
-- `.autonoma/uninstall.sh`
-- `.autonoma/init.sh`
+- `.autonoma/install.mjs`
+- `.autonoma/uninstall.mjs`
 - `.autonoma/bin/autonoma-up`
 - `.autonoma/bin/autonoma-wa`
 - `.autonoma/hooks/**`
@@ -113,11 +108,8 @@ These are the files deployed into `~/.autonoma/`.
 
 Hook runtime details:
 
-- `.autonoma/hooks/*.sh` map Claude hook events to stable installed command paths
-- `.autonoma/scripts/hook-dispatch.sh` is a thin shell wrapper that `exec`s Python
-- `.autonoma/scripts/hook_dispatch.py` reads hook JSON once, writes to SQLite, and conditionally POSTs to the control surface
-- `.autonoma/scripts/bb_write.py` contains the importable blackboard writer used by the dispatcher
-- `.autonoma/scripts/bb-write.py` remains as a compatibility CLI wrapper
+- `.autonoma/hooks/hook-post.mjs` is a shared Node.js dispatcher that reads hook JSON from stdin and POSTs to the control surface
+- Claude Code settings.json entries invoke `node ~/.autonoma/hooks/hook-post.mjs <event-slug>` for each hook event
 
 ---
 
@@ -144,15 +136,7 @@ Install the web app dependencies too:
 pnpm --dir web install
 ```
 
-## 3) Initialize the local runtime directory
-
-This copies runtime assets from `.autonoma/` into `~/.autonoma/`.
-
-```bash
-./.autonoma/init.sh
-```
-
-## 4) Run the installer
+## 3) Run the installer
 
 This:
 - deploys runtime files into `~/.autonoma/`
@@ -160,19 +144,24 @@ This:
 - prompts for a WhatsApp phone number for initial pairing bootstrap (optional; you can skip and fill it in later)
 - initializes the blackboard
 - installs Claude Code hooks into `~/.claude/settings.json` with async background execution and explicit timeouts
-- installs the scheduler (`launchd` on macOS, `crontab` on Linux)
 
 ```bash
-~/.autonoma/install.sh
+node .autonoma/install.mjs
 ```
 
 Use `--dry-run` first if you want to inspect the changes:
 
 ```bash
-~/.autonoma/install.sh --dry-run
+node .autonoma/install.mjs --dry-run
 ```
 
-## 5) Review generated config
+Pass `--with-scheduler` to also install the scheduler (`launchd` on macOS, `systemd` on Linux):
+
+```bash
+node .autonoma/install.mjs --with-scheduler
+```
+
+## 4) Review generated config
 
 Main config:
 
@@ -196,7 +185,7 @@ You will usually want to verify at least:
 - `projectRoot` / `sourceRoot` (should point at this Autonoma checkout)
 - `~/.autonoma/whatsapp/config.json` values, especially `pairingPhoneNumber` and `recipientJid`
 
-## 6) Authenticate WhatsApp manually (optional, but needed for the channel)
+## 5) Authenticate WhatsApp manually (optional, but needed for the channel)
 
 ```bash
 ~/.autonoma/bin/autonoma-wa auth
@@ -300,18 +289,18 @@ If you installed the scheduler, stopping the runtime does **not** permanently di
 Use the uninstaller:
 
 ```bash
-~/.autonoma/uninstall.sh
+node ~/.autonoma/uninstall.mjs
 ```
 
 And for full removal of `~/.autonoma/` too:
 
 ```bash
-~/.autonoma/uninstall.sh --meta
+node ~/.autonoma/uninstall.mjs --meta
 ```
 
 That removes:
 - Claude hooks added by Autonoma
-- launchd / crontab scheduler entries added by Autonoma
+- launchd / systemd scheduler entries added by Autonoma
 - optionally the runtime directory itself
 
 ## Current limitation
@@ -320,7 +309,7 @@ There is not yet a dedicated **single “pause everything but keep it installed�
 
 Today the clean choices are:
 - **temporary stop**: `~/.autonoma/bin/autonoma-up stop`
-- **full shutdown and prevent restart**: `~/.autonoma/uninstall.sh`
+- **full shutdown and prevent restart**: `node ~/.autonoma/uninstall.mjs`
 
 ---
 
@@ -354,7 +343,7 @@ External files touched:
 
 - `~/.claude/settings.json`
 - `~/Library/LaunchAgents/com.autonoma.scheduler.plist` on macOS
-- user crontab entry on Linux
+- `~/.config/systemd/user/autonoma-scheduler.{service,timer}` on Linux
 
 The installer tracks these changes in:
 
@@ -364,11 +353,10 @@ The installer tracks these changes in:
 
 Hook execution model after install:
 
-- Claude invokes `~/.autonoma/hooks/*.sh`
-- those wrappers call `~/.autonoma/scripts/hook-dispatch.sh`
-- the shell wrapper immediately hands off to `~/.autonoma/scripts/hook_dispatch.py`
-- the Python dispatcher reads the JSON payload once, writes the event into the configured `blackboardPath`, and only attempts the HTTP forward when the control surface PID file points to a live process
-- when no listener is present, the dispatcher logs `post_status=skip` instead of spinning on shell string handling
+- Claude Code invokes `node ~/.autonoma/hooks/hook-post.mjs <event-slug>` for each hook event
+- the Node.js dispatcher reads the JSON payload from stdin, enriches it with `AUTONOMA_*` env vars, and POSTs to the control surface
+- when the control surface is not running (`ECONNREFUSED`), the dispatcher silently skips
+- errors are logged to `~/.autonoma/logs/hooks-errors.log`
 
 ---
 
@@ -377,10 +365,10 @@ Hook execution model after install:
 ## Installer lifecycle
 
 ```bash
-~/.autonoma/init.sh
-~/.autonoma/install.sh
-~/.autonoma/uninstall.sh
-~/.autonoma/uninstall.sh --meta
+node .autonoma/install.mjs           # from repo root (first time)
+node ~/.autonoma/install.mjs         # re-run from installed copy
+node ~/.autonoma/uninstall.mjs
+node ~/.autonoma/uninstall.mjs --meta
 ```
 
 ## Control surface lifecycle
@@ -430,7 +418,6 @@ Common files:
 - `cron.log`
 - `install.log`
 - `whatsapp.log`
-- `hooks.log`
 - `hooks-errors.log`
 
 ## SQLite blackboard
@@ -492,7 +479,7 @@ Check:
 
 - `~/.autonoma/config.json`
 - `~/.autonoma/logs/control-surface.log`
-- that `node`, `claude`, `tmux`, `jq`, `sqlite3`, and `python3` are available
+- that `node`, `claude`, `tmux`, and `sqlite3` are available
 - that repo dependencies were installed with `pnpm install`
 
 ## WhatsApp auth errors
@@ -509,17 +496,15 @@ and re-link the session.
 
 Check:
 - `~/.claude/settings.json`
-- `~/.autonoma/hooks/*`
-- `~/.autonoma/scripts/hook_dispatch.py`
-- `~/.autonoma/logs/hooks.log`
+- `~/.autonoma/hooks/hook-post.mjs`
 - `~/.autonoma/logs/hooks-errors.log`
 
 Expected behavior:
 
 - hook entries are installed as async command hooks with a `15` second timeout
-- `hooks.log` should show `post_status=200` when the control surface accepts the event
-- `hooks.log` should show `post_status=skip` when the control surface is down or not yet listening
-- `hooks-errors.log` should only contain malformed payload or transient network warnings, not repeated `curl` connection spam
+- when the control surface is running, hooks POST silently and return
+- when the control surface is down (`ECONNREFUSED`), hooks silently skip — no errors logged
+- `hooks-errors.log` captures only real failures: malformed payloads, timeouts, or unexpected HTTP errors
 
 ## Runtime keeps coming back after stop
 
@@ -528,7 +513,7 @@ That usually means the scheduler is still installed.
 To fully prevent restart:
 
 ```bash
-~/.autonoma/uninstall.sh
+node ~/.autonoma/uninstall.mjs
 ```
 
 ---
@@ -560,13 +545,12 @@ If you are setting up Autonoma from a repo clone:
 1. install prerequisites
 2. `pnpm install`
 3. `pnpm --dir web install`
-4. `./.autonoma/init.sh`
-5. `~/.autonoma/install.sh`
-6. `~/.autonoma/bin/autonoma-up start`
-7. optionally `~/.autonoma/bin/autonoma-wa auth`
-8. optionally `pnpm --dir web dev`
+4. `node .autonoma/install.mjs`
+5. `~/.autonoma/bin/autonoma-up start`
+6. optionally `~/.autonoma/bin/autonoma-wa auth`
+7. optionally `pnpm --dir web dev`
 
 If you want to bring the system down safely:
 
 - stop runtime: `~/.autonoma/bin/autonoma-up stop`
-- full disable / remove scheduler + hooks: `~/.autonoma/uninstall.sh`
+- full disable / remove scheduler + hooks: `node ~/.autonoma/uninstall.mjs`

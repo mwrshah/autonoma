@@ -8,7 +8,7 @@ DB_PATH="${AUTONOMA_DB_PATH:-}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCHEMA_FILE=""
 CURRENT_VERSION=0
-LATEST_VERSION=2
+LATEST_VERSION=3
 
 expand_home() {
   local value="$1"
@@ -128,7 +128,10 @@ DROP INDEX IF EXISTS idx_pi_sessions_last_event_at;
 SQL
 
     if has_table events; then
-      echo "ALTER TABLE events RENAME TO events_legacy;"
+      echo "DROP TABLE events;"
+    fi
+    if has_table events_legacy; then
+      echo "DROP TABLE events_legacy;"
     fi
 
     if has_table sessions; then
@@ -188,26 +191,10 @@ FROM sessions_legacy;
 SQL
     fi
 
-    if has_table events; then
-      cat <<'SQL'
-INSERT INTO events (id, session_id, event_name, tool_name, tool_use_id, timestamp, payload)
-SELECT
-  id,
-  session_id,
-  event_name,
-  tool_name,
-  tool_use_id,
-  COALESCE(timestamp, datetime('now')),
-  payload
-FROM events_legacy;
-SQL
-    fi
-
     cat <<'SQL'
-DROP TABLE IF EXISTS events_legacy;
 DROP TABLE IF EXISTS sessions_legacy;
 DROP TABLE IF EXISTS agents;
-INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);
+INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);
 COMMIT;
 PRAGMA foreign_keys=ON;
 SQL
