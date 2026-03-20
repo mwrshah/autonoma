@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ClipboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useControlSurface } from "~/hooks/use-control-surface";
 import {
   timelineToAgentMessages,
@@ -14,7 +14,7 @@ import type {
 } from "~/lib/types";
 import { createId, extractToolName, parseUserMessageSource } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
-import { Button } from "~/components/ui/Button";
+import { MessageInput } from "~/components/ui/MessageInput";
 import { PiMessageList } from "./PiMessageList";
 import { PiStreamingMessage } from "./PiStreamingMessage";
 
@@ -55,7 +55,7 @@ export function ChatPanel() {
   const { apiClient, wsClient } = useControlSurface();
   const [draft, setDraft] = useState("");
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("followUp");
   const [timeline, setTimeline] = useState<ChatTimelineItem[]>(initialTimeline);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
@@ -67,7 +67,6 @@ export function ChatPanel() {
   const activeAssistantId = useRef<string | null>(null);
   const sentTextsRef = useRef<Set<string>>(new Set());
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const isAtBottomRef = useRef(true);
 
   const addPill = (pill: StatusPill) =>
@@ -370,30 +369,6 @@ export function ChatPanel() {
     }
   }
 
-  // Ctrl+Enter to send
-  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      void handleSubmit(event as unknown as FormEvent);
-    }
-  }
-
-  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const items = event.clipboardData?.items;
-    if (!items) return;
-    const imageFiles: File[] = [];
-    for (const item of items) {
-      if (item.type.startsWith("image/")) {
-        const file = item.getAsFile();
-        if (file) imageFiles.push(file);
-      }
-    }
-    if (imageFiles.length) {
-      event.preventDefault();
-      addImageFiles(imageFiles);
-    }
-  }
-
   return (
     <div className="flex flex-col h-full">
       {/* Header bar */}
@@ -434,85 +409,18 @@ export function ChatPanel() {
         />
       </div>
 
-      {/* Input area — pinned to bottom */}
-      <div className="shrink-0 border-t border-border px-6 py-3">
-        <form onSubmit={handleSubmit} className="space-y-2">
-          {pendingImages.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {pendingImages.map((img, i) => (
-                <div key={i} className="relative group">
-                  <img
-                    src={`data:${img.mimeType};base64,${img.data}`}
-                    alt="Pending attachment"
-                    className="w-16 h-16 object-cover rounded-lg border border-border"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeImage(i)}
-                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                  >
-                    &times;
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="relative">
-            <textarea
-              ref={textareaRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              rows={3}
-              placeholder="Message Pi..."
-              className="w-full rounded-lg border border-border bg-background px-4 py-3 pr-32 text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-            />
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                if (e.target.files?.length) addImageFiles(e.target.files);
-                e.target.value = "";
-              }}
-            />
-            <div className="absolute right-2 bottom-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="text-muted-foreground hover:text-foreground transition-colors p-1"
-                title="Attach image"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
-              </button>
-              <select
-                value={deliveryMode}
-                onChange={(e) =>
-                  setDeliveryMode(e.target.value as DeliveryMode)
-                }
-                className="text-[10px] text-muted-foreground bg-transparent border-none focus:outline-none cursor-pointer"
-              >
-                <option value="followUp">followUp</option>
-                <option value="steer">steer</option>
-              </select>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={isSending || (!draft.trim() && !pendingImages.length)}
-              >
-                {isSending ? "..." : "Send"}
-              </Button>
-            </div>
-          </div>
-          <p className="text-[10px] text-muted-foreground/50">
-            <span className="font-medium text-muted-foreground/70">Web channel</span>
-            {" "}&middot; Ctrl+Enter to send &middot; Pi sees all channels (WhatsApp, Hooks, Cron)
-          </p>
-        </form>
-      </div>
+      <MessageInput
+        draft={draft}
+        onDraftChange={setDraft}
+        deliveryMode={deliveryMode}
+        onDeliveryModeChange={setDeliveryMode}
+        isSending={isSending}
+        onSubmit={handleSubmit}
+        pendingImages={pendingImages}
+        onAddImages={addImageFiles}
+        onRemoveImage={removeImage}
+        rows={3}
+      />
     </div>
   );
 }

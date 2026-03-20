@@ -1,0 +1,168 @@
+import { useRef, type FormEvent, type ClipboardEvent, type DragEvent } from "react";
+import type { DeliveryMode, ImageAttachment } from "~/lib/types";
+import { Button } from "~/components/ui/Button";
+
+type MessageInputProps = {
+  draft: string;
+  onDraftChange: (value: string) => void;
+  deliveryMode: DeliveryMode;
+  onDeliveryModeChange: (mode: DeliveryMode) => void;
+  isSending: boolean;
+  onSubmit: (event: FormEvent) => void;
+  pendingImages: ImageAttachment[];
+  onAddImages: (files: FileList | File[]) => void;
+  onRemoveImage: (index: number) => void;
+  placeholder?: string;
+  rows?: number;
+  helpText?: string;
+};
+
+export function MessageInput({
+  draft,
+  onDraftChange,
+  deliveryMode,
+  onDeliveryModeChange,
+  isSending,
+  onSubmit,
+  pendingImages,
+  onAddImages,
+  onRemoveImage,
+  placeholder = "Message Pi…",
+  rows = 2,
+  helpText = "Enter to send · Shift+Enter for newline",
+}: MessageInputProps) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      onSubmit(event as unknown as FormEvent);
+    }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length) {
+      event.preventDefault();
+      onAddImages(imageFiles);
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (event.dataTransfer?.files?.length) {
+      onAddImages(Array.from(event.dataTransfer.files));
+    }
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+  }
+
+  const canSend = draft.trim() || pendingImages.length > 0;
+
+  return (
+    <div
+      className="shrink-0 border-t border-border px-6 py-3"
+      onDrop={handleDrop}
+      onDragOver={handleDragOver}
+    >
+      <form onSubmit={onSubmit} className="space-y-2">
+        {pendingImages.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {pendingImages.map((img, i) => (
+              <div key={i} className="relative group">
+                <img
+                  src={`data:${img.mimeType};base64,${img.data}`}
+                  alt="Pending attachment"
+                  className="w-16 h-16 object-cover rounded-lg border border-border"
+                />
+                <button
+                  type="button"
+                  onClick={() => onRemoveImage(i)}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files?.length) onAddImages(Array.from(e.target.files));
+            e.target.value = "";
+          }}
+        />
+        <div className="relative rounded-lg border border-border bg-background focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent">
+          <textarea
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            rows={rows}
+            placeholder={placeholder}
+            className="w-full bg-transparent pl-10 pr-4 pt-3 pb-10 text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none"
+          />
+          {/* Attach button — top left */}
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="absolute left-2.5 top-3.5 text-muted-foreground/60 hover:text-foreground transition-colors rounded p-0.5"
+            title="Attach image"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+          </button>
+          {/* Toolbar — bottom right */}
+          <div className="absolute right-2 bottom-2 flex items-center gap-1.5">
+            <div className="inline-flex rounded-md border border-border bg-muted/40 p-0.5">
+              <button
+                type="button"
+                onClick={() => onDeliveryModeChange("followUp")}
+                className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                  deliveryMode === "followUp"
+                    ? "bg-background text-foreground shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Follow-up
+              </button>
+              <button
+                type="button"
+                onClick={() => onDeliveryModeChange("steer")}
+                className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                  deliveryMode === "steer"
+                    ? "bg-background text-foreground shadow-sm font-medium"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Steer
+              </button>
+            </div>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isSending || !canSend}
+            >
+              {isSending ? "Sending…" : "Send"}
+            </Button>
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground/40">{helpText}</p>
+      </form>
+    </div>
+  );
+}
