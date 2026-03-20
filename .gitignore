@@ -15,6 +15,15 @@ throwaway/
 
 # Build output
 dist/
+build/
+out/
+*.tsbuildinfo
+.next/
+.nuxt/
+.output/
+.vinxi/
+.turbo/
+.cache/
 
 # Python (for any helper scripts)
 __pycache__/
