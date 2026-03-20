@@ -24,6 +24,7 @@ out/
 .vinxi/
 .turbo/
 .cache/
+.vite/
 
 # Python (for any helper scripts)
 __pycache__/
