@@ -33,7 +33,7 @@ Browser UI ──HTTP / WS──> Control Surface ──> Embedded Pi + Blackboa
 
 ### Real-Time Updates
 
-v1: control surface WebSocket stream for chat responses and tool activity. Session state may be streamed or lightly polled depending on the backend contract.
+v1: control surface WebSocket stream for chat responses, tool activity, and session state updates. All real-time updates are push-based via WebSocket — no polling.
 
 ## Dependencies
 

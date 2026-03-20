@@ -7,7 +7,7 @@ import {
   stopDaemonProcess,
   runForegroundDaemonProcess,
 } from "./process.ts";
-import { pollWhatsAppViaDaemon, sendWhatsAppViaDaemon } from "./send.ts";
+import { sendWhatsAppViaDaemon } from "./send.ts";
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -78,13 +78,6 @@ async function run(): Promise<void> {
       process.exit(result.ok ? 0 : 1);
       return;
     }
-    case "poll": {
-      const ack = hasFlag(args, "--ack");
-      const limit = takeFlag(args, "--limit");
-      const result = await pollWhatsAppViaDaemon({ ack, limit: limit ? Number(limit) : undefined });
-      printJson(result);
-      return;
-    }
     case "auth": {
       const pairingCode = hasFlag(args, "--pairing-code");
       const existing = await getDaemonStatus();
@@ -96,7 +89,7 @@ async function run(): Promise<void> {
       return;
     }
     default:
-      console.error("Usage: autonoma-wa <start|stop|status|send|poll|auth>");
+      console.error("Usage: autonoma-wa <start|stop|status|send|auth>");
       process.exit(1);
   }
 }

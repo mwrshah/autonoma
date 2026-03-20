@@ -14,20 +14,6 @@ function maybeRow<T>(result: unknown): T | undefined {
   return result as T | undefined;
 }
 
-export function listPendingInboundMessages(db: SqlDatabase, limit = 50): WhatsAppMessageRow[] {
-  return rows<WhatsAppMessageRow>(
-    db.prepare(
-      `SELECT *
-       FROM whatsapp_messages
-       WHERE direction = 'inbound'
-         AND status = 'pending'
-       ORDER BY created_at ASC
-       LIMIT ?`,
-    ).all(limit),
-  );
-}
-
-
 export function getWhatsAppMessageByWaMessageId(db: SqlDatabase, waMessageId: string): WhatsAppMessageRow | undefined {
   return maybeRow<WhatsAppMessageRow>(
     db.prepare("SELECT * FROM whatsapp_messages WHERE wa_message_id = ? ORDER BY created_at DESC LIMIT 1").get(waMessageId),

@@ -18,7 +18,6 @@ import {
   markWhatsAppMessageDelivered,
   markWhatsAppMessageFailed,
   markWhatsAppMessageSent,
-  pollPendingInboundMessages,
 } from "../blackboard/writers/whatsapp-writer.ts";
 import { ensureAuthDirectories, backupAuthState, hasStoredAuthState, restoreAuthStateBackup } from "./auth.ts";
 import { loadWhatsAppConfig, resolvePairingPhoneNumber, resolveRecipientJid, ensureWhatsAppHome } from "./config.ts";
@@ -45,7 +44,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function getDisconnectCode(update: ConnectionState): number | undefined {
+function getDisconnectCode(update: Partial<ConnectionState>): number | undefined {
   const error = update.lastDisconnect?.error as
     | { output?: { statusCode?: number }; statusCode?: number; data?: { statusCode?: number } }
     | undefined;
@@ -141,19 +140,6 @@ class WhatsAppDaemon {
           ok: true,
           status: "stopped",
         };
-      case "poll": {
-        const result = pollPendingInboundMessages(this.db, {
-          ack: command.ack,
-          limit: command.limit ?? loadWhatsAppConfig().pollLimit,
-        });
-        return {
-          ok: true,
-          status: "ok",
-          items: result.items,
-          acked: result.acked,
-          resolvedActions: result.resolvedActions,
-        };
-      }
       case "send":
         return await this.handleSendCommand(command.text, command.contextRef, command.pendingAction);
       default:
@@ -269,7 +255,7 @@ class WhatsAppDaemon {
     }
   }
 
-  private async onConnectionUpdate(update: ConnectionState): Promise<void> {
+  private async onConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
     if (update.qr && this.options.authMode && !this.options.pairingCode) {
       console.log("\nScan this QR code with WhatsApp:\n");
       qrcode.generate(update.qr, { small: true });
@@ -433,7 +419,7 @@ class WhatsAppDaemon {
     this.status = "stopping";
 
     try {
-      this.socket?.ev.removeAllListeners();
+      (this.socket?.ev as any)?.removeAllListeners?.();
       const transport = this.socket as unknown as { ws?: { close: () => void } } | undefined;
       transport?.ws?.close?.();
     } catch (error) {

@@ -135,7 +135,7 @@ Blackboard + runtime config (with workstreams)
 - Git worktree creation per workstream (Pi writes `repo_path` and `worktree_path` back to workstream row)
 - Git worktree cleanup on workstream completion (Pi deletes worktree + workstream row)
 - Direct session messaging endpoint
-- `launch_claude_code` and `manage_session` tool behavior — sessions tagged with `workstream_id`
+- Claude Code session launch and management via tmux-2 skill — sessions tagged with `workstream_id`
 - Hook forwarding alignment
 - Control-surface-side event filtering
 - Browser-facing session/transcript endpoints

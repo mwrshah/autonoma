@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import type {
-  PendingActionRow,
   WhatsAppMessageDirection,
   WhatsAppMessageRow,
   WhatsAppMessageStatus,
@@ -9,9 +8,7 @@ import {
   getLatestOutboundWithContext,
   getLatestPendingAction,
   getWhatsAppMessageByWaMessageId,
-  listPendingInboundMessages,
 } from "../queries/whatsapp.ts";
-import { resolveLatestPendingAction, resolvePendingActionByContextRef } from "./pending-actions.ts";
 
 type SqlDatabase = Pick<DatabaseSync, "prepare">;
 
@@ -32,7 +29,7 @@ function timestamp(value?: string): string {
 }
 
 function getMessageById(db: SqlDatabase, id: number): WhatsAppMessageRow {
-  return db.prepare("SELECT * FROM whatsapp_messages WHERE id = ?").get(id) as WhatsAppMessageRow;
+  return db.prepare("SELECT * FROM whatsapp_messages WHERE id = ?").get(id) as unknown as WhatsAppMessageRow;
 }
 
 function insertWhatsAppMessage(db: SqlDatabase, input: InsertWhatsAppMessageInput): WhatsAppMessageRow {
@@ -145,60 +142,4 @@ export function insertInboundWhatsAppMessage(
   });
 }
 
-function ackInboundMessages(
-  db: SqlDatabase,
-  rows: WhatsAppMessageRow[],
-  processedAt?: string,
-): { acked: WhatsAppMessageRow[]; resolvedActions: PendingActionRow[] } {
-  if (rows.length === 0) {
-    return { acked: [], resolvedActions: [] };
-  }
 
-  const effectiveProcessedAt = timestamp(processedAt);
-  const acked: WhatsAppMessageRow[] = [];
-  const resolvedActions: PendingActionRow[] = [];
-
-  for (const row of rows) {
-    db.prepare(
-      `UPDATE whatsapp_messages
-       SET status = 'processed',
-           processed_at = ?
-       WHERE id = ?`
-    ).run(effectiveProcessedAt, row.id);
-
-    acked.push(getMessageById(db, row.id));
-
-    const payload = {
-      reply: row.body,
-      whatsappMessageId: row.wa_message_id,
-      processedAt: effectiveProcessedAt,
-    } satisfies Record<string, unknown>;
-
-    const resolved = row.context_ref
-      ? resolvePendingActionByContextRef(db, row.context_ref, payload, effectiveProcessedAt)
-      : resolveLatestPendingAction(db, payload, effectiveProcessedAt);
-
-    if (resolved) {
-      resolvedActions.push(resolved);
-    }
-  }
-
-  return { acked, resolvedActions };
-}
-
-export function pollPendingInboundMessages(
-  db: SqlDatabase,
-  options: { ack?: boolean; limit?: number } = {},
-): {
-  items: WhatsAppMessageRow[];
-  acked: WhatsAppMessageRow[];
-  resolvedActions: PendingActionRow[];
-} {
-  const items = listPendingInboundMessages(db, options.limit ?? 50);
-  if (!options.ack) {
-    return { items, acked: [], resolvedActions: [] };
-  }
-
-  const { acked, resolvedActions } = ackInboundMessages(db, items);
-  return { items, acked, resolvedActions };
-}

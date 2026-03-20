@@ -4,7 +4,7 @@ Real-time, queryable view of Autonoma state on the machine. Fed by Claude Code h
 
 ## Problem
 
-Multiple sessions run concurrently across tmux and worktrees. The orchestrator, cron, WhatsApp channel, and web app all need answers: which sessions are working, idle, stale, or ended? What task is each on? Which did Autonoma start? What messages are pending? Without shared state, each consumer polls tmux, parses transcripts, and reconciles independently.
+Multiple sessions run concurrently across tmux and worktrees. The orchestrator, cron, WhatsApp channel, and web app all need answers: which sessions are working, idle, stale, or ended? What task is each on? Which did Autonoma start? What messages are pending? Without shared state, each consumer would need to independently query tmux, parse transcripts, and reconcile — duplicating logic across every consumer.
 
 ## Goals
 
@@ -80,7 +80,7 @@ Tracks embedded Pi runtime sessions separately from Claude Code sessions. `sessi
 | remote_jid | TEXT | Remote JID |
 | body | TEXT | Message body |
 | context_ref | TEXT | Reply-matching context |
-| status | TEXT | pending / sent / delivered / processed / failed |
+| status | TEXT | sent / delivered / failed (outbound); received (inbound) |
 | error_message | TEXT | Failure info |
 | created_at | DATETIME | Creation time |
 | processed_at | DATETIME | Inbound processing time |
@@ -115,7 +115,7 @@ Environment variables enriched by the hook script:
 - `AUTONOMA_TASK_DESCRIPTION`
 - `AUTONOMA_TODOIST_TASK_ID`
 
-This gives the blackboard a deterministic handshake between `launch_claude_code` and the first hook event. Users can also opt manual sessions into tracking by launching with `AUTONOMA_AGENT_MANAGED=1 claude`.
+This gives the blackboard a deterministic handshake between the tmux-based session launch and the first hook event. Users can also opt manual sessions into tracking by launching with `AUTONOMA_AGENT_MANAGED=1 claude`.
 
 ## Staleness
 

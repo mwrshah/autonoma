@@ -192,82 +192,69 @@ export async function persistInboundMessage(
   message: WAMessage,
 ): Promise<{ body?: string; contextRef?: string; rowId?: number }> {
   const waMessageId = message.key.id;
-  if (shouldFilterRecentOutboundEcho(db, message)) {
-    logger.info(
-      {
-        waMessageId,
-        remoteJid: message.key.remoteJid,
-        bodyPreview: previewBody(extractConversationBody(message) ?? ""),
-        windowMs: OUTBOUND_ECHO_WINDOW_MS,
-      },
-      "ignored recent outbound WhatsApp echo event",
-    );
-    return {};
-  }
+  const remoteJid = message.key.remoteJid ?? resolveRecipientJid();
 
-  if (waMessageId) {
-    const existing = getWhatsAppMessageByWaMessageId(db, waMessageId);
-    if (existing?.direction === "inbound") {
-      logger.info(
-        {
-          rowId: existing.id,
-          waMessageId,
-          remoteJid: existing.remote_jid,
-          status: existing.status,
-        },
-        "ignored duplicate inbound WhatsApp message",
-      );
-      return {
-        body: existing.body,
-        contextRef: existing.context_ref ?? undefined,
-        rowId: existing.id,
-      };
-    }
-  }
-
+  // Extract body first — no DB needed for this check
   const body = extractConversationBody(message);
   if (!body) {
     logger.info(
-      {
-        waMessageId: message.key.id,
-        remoteJid: message.key.remoteJid,
-      },
+      { waMessageId, remoteJid },
       "ignored inbound WhatsApp message without supported text body",
     );
     return {};
   }
 
-  const quotedWaMessageId = extractQuotedWaMessageId(message);
-  const contextRef = resolveInboundContextRef(db, { quotedWaMessageId, fallbackChannel: "whatsapp" });
-  const row = insertInboundWhatsAppMessage(db, {
-    waMessageId,
-    remoteJid: message.key.remoteJid ?? resolveRecipientJid(),
-    body,
-    contextRef,
-  });
+  // Forward to control surface immediately — DB must not gate delivery
+  await forwardInboundToControlSurface({ body, waMessageId, remoteJid });
 
-  logger.info(
-    {
-      rowId: row.id,
-      waMessageId: message.key.id,
-      remoteJid: row.remote_jid,
-      contextRef,
-      quotedWaMessageId,
-      bodyPreview: previewBody(body),
-    },
-    "persisted inbound WhatsApp message",
-  );
+  // Persist to blackboard as a secondary concern
+  try {
+    if (shouldFilterRecentOutboundEcho(db, message)) {
+      logger.info(
+        {
+          waMessageId,
+          remoteJid,
+          bodyPreview: previewBody(body),
+          windowMs: OUTBOUND_ECHO_WINDOW_MS,
+        },
+        "outbound echo — already forwarded, skipping persistence",
+      );
+      return { body };
+    }
 
-  await forwardInboundToControlSurface({
-    body,
-    waMessageId: message.key.id,
-    contextRef,
-    remoteJid: row.remote_jid,
-  });
+    if (waMessageId) {
+      const existing = getWhatsAppMessageByWaMessageId(db, waMessageId);
+      if (existing?.direction === "inbound") {
+        logger.info(
+          { rowId: existing.id, waMessageId, remoteJid: existing.remote_jid },
+          "duplicate inbound WhatsApp message — already forwarded, skipping persistence",
+        );
+        return { body, contextRef: existing.context_ref ?? undefined, rowId: existing.id };
+      }
+    }
 
-  return {
-    body,
-    contextRef,
-    rowId: row.id,
-  };
+    const quotedWaMessageId = extractQuotedWaMessageId(message);
+    const contextRef = resolveInboundContextRef(db, { quotedWaMessageId, fallbackChannel: "whatsapp" });
+    const row = insertInboundWhatsAppMessage(db, { waMessageId, remoteJid, body, contextRef });
+
+    logger.info(
+      {
+        rowId: row.id,
+        waMessageId,
+        remoteJid: row.remote_jid,
+        contextRef,
+        quotedWaMessageId,
+        bodyPreview: previewBody(body),
+      },
+      "persisted inbound WhatsApp message",
+    );
+
+    return { body, contextRef, rowId: row.id };
+  } catch (error) {
+    logger.error(
+      { err: error, waMessageId, remoteJid, bodyPreview: previewBody(body) },
+      "failed to persist inbound WhatsApp message — message was already forwarded to control surface",
+    );
+    return { body };
+  }
 }

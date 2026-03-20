@@ -7,7 +7,6 @@ type WhatsAppConfig = {
   pairingPhoneNumber?: string;
   typingDelayMs: number;
   daemonStartupTimeoutMs: number;
-  pollLimit: number;
 };
 
 const DEFAULT_WHATSAPP_CONFIG: WhatsAppConfig = {
@@ -15,7 +14,6 @@ const DEFAULT_WHATSAPP_CONFIG: WhatsAppConfig = {
   pairingPhoneNumber: undefined,
   typingDelayMs: 800,
   daemonStartupTimeoutMs: 8000,
-  pollLimit: 50,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -86,7 +84,6 @@ export function loadWhatsAppConfig(configPath = getWhatsAppConfigPath()): WhatsA
       raw.daemonStartupTimeoutMs,
       DEFAULT_WHATSAPP_CONFIG.daemonStartupTimeoutMs,
     ),
-    pollLimit: readPositiveInt(raw.pollLimit, DEFAULT_WHATSAPP_CONFIG.pollLimit),
   };
 }
 

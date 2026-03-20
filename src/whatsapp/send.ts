@@ -1,6 +1,5 @@
 import type {
   PendingActionRequest,
-  PollWhatsAppRequest,
   SendWhatsAppRequest,
   SendWhatsAppResult,
 } from "../contracts/index.ts";
@@ -63,19 +62,4 @@ export async function sendWhatsAppViaDaemon(
   }
 }
 
-export async function pollWhatsAppViaDaemon(request: PollWhatsAppRequest = {}): Promise<Record<string, unknown>> {
-  const response = await sendDaemonCommand({
-    command: "poll",
-    ack: request.ack,
-    limit: request.limit,
-  });
 
-  return {
-    ok: response.ok,
-    status: response.status,
-    items: response.items ?? [],
-    acked: response.acked ?? [],
-    resolvedActions: response.resolvedActions ?? [],
-    error: response.error,
-  };
-}

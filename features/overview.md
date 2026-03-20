@@ -37,10 +37,9 @@ Pi is reactive in v1 — triggered by human messages and Claude Code hook events
 │  │           Embedded Pi Agent (SDK)            │        │
 │  │  Persistent session · auto-compacting        │        │
 │  │  Serialized turn queue                       │        │
-│  │  Tools: send_to_user, query_blackboard,      │        │
-│  │         manage_session, launch_claude_code,  │        │
-│  │         read, bash, grep                     │        │
-│  │  Skills: Todoist + Autonoma workflows        │        │
+│  │  Tools: send_whatsapp, query_blackboard,      │        │
+│  │         reload_resources, read, bash, grep   │        │
+│  │  Skills: Todoist, tmux-2, Autonoma workflows │        │
 │  └──────────────────────────────────────────────┘        │
 │                         │                                │
 └─────────────────────────┼────────────────────────────────┘
@@ -118,6 +117,8 @@ Workstreams are ephemeral. An open workstream has a row in the `workstreams` tab
 - **Pi is the brain**: orchestration intelligence lives in the embedded Pi session, not in disconnected wrappers.
 - **Todoist is human-owned**: Pi reads Todoist when asked, can annotate tasks, but never autonomously completes them.
 - **Permission-gated**: Pi suggests actions, doesn't execute significant changes without user approval.
+- **Push-based, never poll**: all message delivery is event-driven. WhatsApp inbound pushes to the control surface via HTTP; Claude Code hooks push via HTTP; the web client pushes via WebSocket. No component polls a database or queue to discover new messages. Polling introduces unnecessary latency, coupling, and failure modes.
+- **Delivery before bookkeeping**: the primary action (forwarding a message to its destination) must never be gated on secondary concerns (database writes, context enrichment, deduplication). Persist and enrich after delivery succeeds, inside a try/catch so failures are logged but never drop the message.
 - **Minimal footprint**: only `~/.claude/settings.json` and systemd/launchd entries touched outside Autonoma's directory.
 - **Uninstaller-first**: removal scripts before installation scripts.
 - **Namespaced**: all Autonoma artifacts are identifiable for clean removal.

@@ -1,4 +1,3 @@
-import type { PendingActionRow, WhatsAppMessageRow } from "./blackboard.ts";
 import type { WhatsAppDaemonStatus as ControlSurfaceWhatsAppStatus } from "./control-surface-api.ts";
 
 export type WhatsAppConnectionStatus = Exclude<ControlSurfaceWhatsAppStatus, "unknown">;
@@ -33,11 +32,6 @@ export interface SendWhatsAppResult {
   error?: string;
 }
 
-export interface PollWhatsAppRequest {
-  ack?: boolean;
-  limit?: number;
-}
-
 export interface PendingActionRequest {
   kind: string;
   promptText: string;
@@ -48,7 +42,6 @@ export interface PendingActionRequest {
 export type DaemonCommand =
   | { command: "status" }
   | { command: "shutdown" }
-  | { command: "poll"; ack?: boolean; limit?: number }
   | {
       command: "send";
       text: string;
@@ -64,8 +57,5 @@ export interface DaemonResponse {
   messageId?: string;
   rowId?: number;
   contextRef?: string;
-  items?: WhatsAppMessageRow[];
-  acked?: WhatsAppMessageRow[];
-  resolvedActions?: PendingActionRow[];
   daemon?: WhatsAppDaemonRuntimeStatus;
 }

@@ -27,17 +27,18 @@ OpenClaw's debouncing, echo detection, lane concurrency, block streaming — not
 
 ### Architecture
 
-Lightweight Node.js process: connects via Baileys, exposes `send(text)` and `onMessage(callback)`, persists auth at `~/.autonoma/whatsapp/auth/`. It is a transport daemon owned by the app runtime: starting the control surface should also ensure this daemon is up. CLI interface for skills/hooks:
+Lightweight Node.js process: connects via Baileys, exposes `send(text)` and `onMessage(callback)`, persists auth at `~/.autonoma/whatsapp/auth/`. It is a transport daemon owned by the app runtime: starting the control surface should also ensure this daemon is up. CLI interface for manual use:
 
 ```bash
 autonoma-wa send "3 sessions running. 'search UI' stalled — restart? (y/n)"
-autonoma-wa poll  # check for replies
 ```
 
 ### Message Routing
 
-**Outbound**: agent composes → send.
-**Inbound**: reply written to blackboard → next cron invocation reads and acts.
+All message delivery is push-based — no polling anywhere in the pipeline.
+
+**Outbound**: Pi calls `send_whatsapp` tool → control surface sends IPC command to daemon → daemon delivers via Baileys.
+**Inbound**: Baileys `messages.upsert` event fires → daemon extracts message body → daemon immediately forwards to control surface via HTTP POST `/message` → control surface enqueues into Pi's turn queue. Blackboard persistence (dedup, context enrichment, history) happens as a secondary concern after forwarding, wrapped in error handling so a database failure never drops a message.
 
 ### Authentication
 

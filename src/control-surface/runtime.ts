@@ -41,8 +41,7 @@ import { TurnQueue, type QueueItem, type QueueSource } from "./queue/turn-queue.
 import { WebSocketHub, type WebSocketClient } from "./ws/hub.ts";
 import { sendDaemonCommand } from "../whatsapp/ipc.ts";
 import { getDaemonStatus, startDaemonProcess, stopDaemonProcess, waitForDaemonReady } from "../whatsapp/process.ts";
-import { directSessionMessage, manageSessionTool } from "./tools/manage-session.ts";
-import { launchClaudeCodeTool } from "./tools/launch-claude-code.ts";
+import { directSessionMessage } from "./tools/manage-session.ts";
 
 type EnqueueInput = {
 	text: string;
@@ -380,27 +379,6 @@ export class ControlSurfaceRuntime {
 				},
 			},
 			{
-				name: "poll_whatsapp",
-				label: "Poll WhatsApp",
-				description: "Poll unread inbound WhatsApp messages.",
-				parameters: {
-					type: "object",
-					properties: {
-						ack: { type: "boolean", description: "Mark messages processed after polling" },
-						limit: { type: "number", description: "Maximum messages to return" },
-					},
-					additionalProperties: false,
-				},
-				execute: async (_toolCallId: string, params: any) => {
-					const response = await this.sendWhatsAppCommand({
-						command: "poll",
-						ack: Boolean(params.ack),
-						limit: typeof params.limit === "number" ? params.limit : undefined,
-					});
-					return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: response };
-				},
-			},
-			{
 				name: "query_blackboard",
 				label: "Query Blackboard",
 				description: "Run read-only SQL against the Autonoma blackboard.",
@@ -418,46 +396,23 @@ export class ControlSurfaceRuntime {
 				},
 			},
 			{
-				name: "manage_session",
-				label: "Manage Claude Session",
-				description: "List, inspect, inject into, or kill tmux-backed Claude Code sessions.",
+				name: "reload_resources",
+				label: "Reload Resources",
+				description: "Reload skills, extensions, prompts, context files, and system prompt. Use after skills or AGENTS.md files have been added or changed on disk.",
 				parameters: {
 					type: "object",
-					properties: {
-						action: { type: "string", enum: ["list", "inspect", "inject", "kill"] },
-						session_id: { type: "string" },
-						tmux_session: { type: "string" },
-						sessionName: { type: "string" },
-						text: { type: "string" },
-						verify_inference: { type: "boolean" },
-					},
-					required: ["action"],
+					properties: {},
 					additionalProperties: false,
 				},
-				execute: async (_toolCallId: string, params: any) => {
-					const result = await manageSessionTool(this, params);
-					return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
-				},
-			},
-			{
-				name: "launch_claude_code",
-				label: "Launch Claude Code",
-				description: "Launch a new interactive Claude Code session inside tmux with Autonoma metadata.",
-				parameters: {
-					type: "object",
-					properties: {
-						cwd: { type: "string" },
-						prompt: { type: "string" },
-						session_name: { type: "string" },
-						task_description: { type: "string" },
-						todoist_task_id: { type: "string" },
-					},
-					required: ["cwd", "prompt"],
-					additionalProperties: false,
-				},
-				execute: async (_toolCallId: string, params: any) => {
-					const result = await launchClaudeCodeTool(params, this.config);
-					return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: result };
+				execute: async () => {
+					if (!this.piSession) {
+						return { content: [{ type: "text", text: "Error: Pi session not initialized" }], details: {} };
+					}
+					await this.piSession.reload();
+					return {
+						content: [{ type: "text", text: "Resources reloaded. Skills, extensions, prompts, context files, and system prompt have been refreshed." }],
+						details: { reloadedAt: new Date().toISOString() },
+					};
 				},
 			},
 		];

@@ -14,7 +14,7 @@ Autonoma needs one always-on process where Pi lives, where channels push message
 2. Pi maintains one persistent session with auto-compaction
 3. The active Pi runtime session is mirrored into the blackboard in a dedicated `pi_sessions` table
 4. All inbound sources route into a single queued prompt stream: WhatsApp replies, Claude Code hook events, cron ticks, web app messages
-5. Pi acts through custom tools: send WhatsApp, query blackboard, manage tmux sessions, launch Claude Code
+5. Pi acts through custom tools (send WhatsApp, query blackboard, reload resources) and on-demand skills (tmux-2 for session management, Todoist for task context)
 6. Todoist integration comes from existing Pi skills, not bespoke infrastructure code
 7. HTTP + WebSocket API for external processes and the thin web client
 8. The control surface acts as the app runtime owner: on startup it also brings up dependent processes such as the WhatsApp daemon
@@ -41,12 +41,10 @@ Autonoma needs one always-on process where Pi lives, where channels push message
                │   │  Persistent, auto-compacting session     │   │
                │   │  Tools:                                   │   │
                │   │   - send_whatsapp                         │   │
-               │   │   - poll_whatsapp                         │   │
                │   │   - query_blackboard                      │   │
-               │   │   - manage_session                        │   │
-               │   │   - launch_claude_code                    │   │
+               │   │   - reload_resources                      │   │
                │   │   - read, bash, grep                      │   │
-               │   │  Skills: Todoist + Autonoma workflows     │   │
+               │   │  Skills: Todoist, tmux-2, Autonoma wkflws │   │
                │   └──────────────────────┬───────────────────┘   │
                │                          │                       │
                │   ┌──────────────────────▼───────────────────┐   │
@@ -81,11 +79,10 @@ Pi uses custom tools for machine actions and skills for workflow logic.
 | Mechanism | What It Does |
 |-----------|---------------|
 | `send_whatsapp` | Sends message via daemon Unix socket IPC |
-| `poll_whatsapp` | Checks for unprocessed inbound messages |
 | `query_blackboard` | Runs read-only SQL against `blackboard.db` |
-| `manage_session` | List / inspect / inject / kill tmux sessions |
-| `launch_claude_code` | Start a new managed Claude Code session in tmux |
-| Skills | Todoist and workflow-specific behavior loaded into Pi |
+| `reload_resources` | Hot-reload skills, extensions, prompts, context files, and system prompt |
+| Skills (tmux-2) | Manage Claude Code sessions across tmux — launch, inspect, inject, kill |
+| Skills (Todoist) | Todoist and workflow-specific behavior loaded into Pi |
 | Standard tools | `read`, `bash`, `grep` |
 
 ## Session Lifecycle
