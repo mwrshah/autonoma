@@ -26,15 +26,15 @@ export class BlackboardDatabase {
 	}
 
 	run(sql: string, ...params: Array<unknown>): void {
-		this.prepare(sql).run(...params);
+		this.prepare(sql).run(...(params as Array<import("node:sqlite").SQLInputValue>));
 	}
 
 	get<T = Record<string, unknown>>(sql: string, ...params: Array<unknown>): T | undefined {
-		return this.prepare(sql).get(...params) as T | undefined;
+		return this.prepare(sql).get(...(params as Array<import("node:sqlite").SQLInputValue>)) as T | undefined;
 	}
 
 	all<T = Record<string, unknown>>(sql: string, ...params: Array<unknown>): T[] {
-		return this.prepare(sql).all(...params) as T[];
+		return this.prepare(sql).all(...(params as Array<import("node:sqlite").SQLInputValue>)) as T[];
 	}
 
 	ping(): boolean {

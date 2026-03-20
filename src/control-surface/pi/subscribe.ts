@@ -122,11 +122,12 @@ export function subscribeToPiSession(
 
     switch (event.type) {
       case "message_update": {
-        if (event.assistantMessageEvent?.type === "text_delta" && typeof event.assistantMessageEvent.delta === "string") {
+        const ame = event.assistantMessageEvent as { type?: string; delta?: string } | undefined;
+        if (ame?.type === "text_delta" && typeof ame.delta === "string") {
           broadcast(wsHub, {
             type: "text_delta",
             sessionId: session.sessionId,
-            delta: event.assistantMessageEvent.delta,
+            delta: ame.delta,
           });
         }
         break;
@@ -152,8 +153,8 @@ export function subscribeToPiSession(
         const payload: ToolExecutionStartWebSocketEvent = {
           type: "tool_execution_start",
           sessionId: session.sessionId,
-          tool: event.toolName,
-          toolUseId: event.toolCallId,
+          tool: event.toolName as string | undefined,
+          toolUseId: event.toolCallId as string | undefined,
           args: event.args ?? event.parameters,
           timestamp: now,
           event,
@@ -165,10 +166,10 @@ export function subscribeToPiSession(
         const payload: ToolExecutionEndWebSocketEvent = {
           type: "tool_execution_end",
           sessionId: session.sessionId,
-          tool: event.toolName,
-          toolUseId: event.toolCallId,
+          tool: event.toolName as string | undefined,
+          toolUseId: event.toolCallId as string | undefined,
           result: event.result,
-          isError: event.isError,
+          isError: event.isError as boolean | undefined,
           timestamp: now,
           event,
         };

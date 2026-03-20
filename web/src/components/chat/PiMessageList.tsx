@@ -11,9 +11,11 @@ import { ensurePiWebUiReady, getPiWebUiInitError } from "~/lib/pi-web-ui-init";
 export function PiMessageList({
   messages,
   isStreaming = false,
+  pendingToolCalls,
 }: {
   messages: AgentMessage[];
   isStreaming?: boolean;
+  pendingToolCalls?: Set<string>;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const elementRef = useRef<HTMLElement | null>(null);
@@ -56,9 +58,9 @@ export function PiMessageList({
     const el = elementRef.current as any;
     el.messages = messages;
     el.tools = [];
-    el.pendingToolCalls = new Set<string>();
+    el.pendingToolCalls = pendingToolCalls ?? new Set<string>();
     el.isStreaming = isStreaming;
-  }, [ready, messages, isStreaming]);
+  }, [ready, messages, isStreaming, pendingToolCalls]);
 
   useEffect(() => {
     return () => {

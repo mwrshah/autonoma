@@ -64,7 +64,7 @@ export function touchPiPrompt(
   db: BlackboardDatabase,
   piSessionId: string,
   timestamp: string,
-  status: PersistedPiSessionStatus = "active",
+  status: Extract<PersistedPiSessionStatus, "active" | "idle"> = "active",
 ): void {
   touchPiSessionPrompt(db, piSessionId, timestamp, status);
 }
@@ -73,7 +73,7 @@ export function touchPiEvent(
   db: BlackboardDatabase,
   piSessionId: string,
   timestamp: string,
-  status: PersistedPiSessionStatus = "active",
+  status: Extract<PersistedPiSessionStatus, "active" | "idle"> = "active",
 ): void {
   touchPiSessionEvent(db, piSessionId, timestamp, status);
 }

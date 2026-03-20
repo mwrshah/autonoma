@@ -61,7 +61,7 @@ export async function launchClaudeSession(input: LaunchClaudeSessionInput): Prom
   });
 
   if (!delivery.ok) {
-    throw new Error(`Claude launched in tmux session ${tmuxSession}, but initial prompt delivery failed: ${delivery.reason}`);
+    throw new Error(`Claude launched in tmux session ${tmuxSession}, but initial prompt delivery failed: ${(delivery as { reason?: string }).reason}`);
   }
 
   return {

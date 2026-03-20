@@ -3,6 +3,7 @@ import { useControlSurface } from "~/hooks/use-control-surface";
 import {
   timelineToAgentMessages,
   buildStreamingAssistantMessage,
+  pendingToolCallsFromTimeline,
 } from "~/lib/pi-web-ui-bridge";
 import type {
   ChatTimelineItem,
@@ -61,6 +62,7 @@ export function ChatPanel() {
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [statusPills, setStatusPills] = useState<StatusPill[]>([]);
   const activeAssistantId = useRef<string | null>(null);
+  const sentTextsRef = useRef<Set<string>>(new Set());
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -75,6 +77,11 @@ export function ChatPanel() {
 
   const agentMessages = useMemo(
     () => timelineToAgentMessages(timeline),
+    [timeline],
+  );
+
+  const pendingToolCalls = useMemo(
+    () => pendingToolCallsFromTimeline(timeline),
     [timeline],
   );
 
@@ -144,10 +151,34 @@ export function ChatPanel() {
       }
 
       if (message.type === "message_end") {
-        if (message.role !== "assistant") return;
+        const content = message.content || "";
+
+        if (message.role === "user") {
+          // Deduplicate: skip user messages this client already displayed optimistically.
+          // The backend wraps web messages as: [Web] User: "text"
+          for (const sent of sentTextsRef.current) {
+            if (content === `[Web] User: "${sent}"`) {
+              sentTextsRef.current.delete(sent);
+              return;
+            }
+          }
+          if (content.trim()) {
+            setTimeline((current) => [
+              ...current,
+              {
+                id: createId("user"),
+                kind: "message",
+                role: "user",
+                content,
+                createdAt: message.timestamp ?? new Date().toISOString(),
+              },
+            ]);
+          }
+          return;
+        }
+
         setStreamingText(null);
         activeAssistantId.current = null;
-        const content = message.content || "";
         if (content.trim()) {
           setTimeline((current) => [
             ...current,
@@ -259,6 +290,7 @@ export function ChatPanel() {
         createdAt: new Date().toISOString(),
       },
     ]);
+    sentTextsRef.current.add(text);
 
     try {
       await wsClient.sendMessage(text, deliveryMode);
@@ -317,6 +349,7 @@ export function ChatPanel() {
         <PiMessageList
           messages={agentMessages}
           isStreaming={streamingText !== null}
+          pendingToolCalls={pendingToolCalls}
         />
         <PiStreamingMessage
           message={streamingMessage}

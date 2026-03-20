@@ -92,14 +92,14 @@ export function listSessions(db: BlackboardDatabase): SessionListItem[] {
          END,
          last_event_at DESC`,
     )
-    .all() as ClaudeSessionRow[];
+    .all() as unknown as ClaudeSessionRow[];
 
   return rows.map(mapSessionRow);
 }
 
 
 export function getSessionById(db: BlackboardDatabase, sessionId: string): SessionListItem | null {
-  const row = db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(sessionId) as ClaudeSessionRow | undefined;
+  const row = db.prepare("SELECT * FROM sessions WHERE session_id = ?").get(sessionId) as unknown as ClaudeSessionRow | undefined;
   return row ? mapSessionRow(row) : null;
 }
 
@@ -112,7 +112,7 @@ export function getSessionByTmuxSession(db: BlackboardDatabase, tmuxSession: str
        ORDER BY last_event_at DESC
        LIMIT 1`,
     )
-    .get(tmuxSession) as ClaudeSessionRow | undefined;
+    .get(tmuxSession) as unknown as ClaudeSessionRow | undefined;
 
   return row ? mapSessionRow(row) : null;
 }
@@ -174,7 +174,7 @@ function findStaleCandidates(
          )
        ORDER BY last_event_at ASC`,
     )
-    .all(stallMinutes, toolTimeoutMinutes) as ClaudeSessionRow[];
+    .all(stallMinutes, toolTimeoutMinutes) as unknown as ClaudeSessionRow[];
   return rows.map(mapSessionRow);
 }
 
@@ -201,7 +201,7 @@ export function findIdleCleanupCandidates(db: BlackboardDatabase, idleBeforeIsoO
            AND last_event_at < ?
          ORDER BY last_event_at ASC`,
       )
-      .all(idleBeforeIsoOrHours) as ClaudeSessionRow[];
+      .all(idleBeforeIsoOrHours) as unknown as ClaudeSessionRow[];
   } else {
     rows = db
       .prepare(
@@ -211,7 +211,7 @@ export function findIdleCleanupCandidates(db: BlackboardDatabase, idleBeforeIsoO
            AND datetime(last_event_at) <= datetime('now', '-' || ? || ' hours')
          ORDER BY last_event_at ASC`,
       )
-      .all(idleBeforeIsoOrHours) as ClaudeSessionRow[];
+      .all(idleBeforeIsoOrHours) as unknown as ClaudeSessionRow[];
   }
   return rows.map(mapSessionRow);
 }

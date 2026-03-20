@@ -1,0 +1,198 @@
+/* ── Chat timeline ── */
+
+export type ChatTimelineMessage = {
+  id: string;
+  kind: "message";
+  role: "user" | "assistant" | "system";
+  content: string;
+  createdAt: string;
+};
+
+export type ChatTimelineTool = {
+  id: string;
+  kind: "tool";
+  tool: string;
+  phase: "start" | "end";
+  toolUseId?: string;
+  args?: unknown;
+  result?: unknown;
+  isError?: boolean;
+  createdAt: string;
+};
+
+export type ChatTimelineDivider = {
+  id: string;
+  kind: "divider";
+  createdAt: string;
+};
+
+export type ChatTimelineItem =
+  | ChatTimelineMessage
+  | ChatTimelineTool
+  | ChatTimelineDivider;
+
+/* ── Connection ── */
+
+export type ConnectionState =
+  | "connected"
+  | "connecting"
+  | "reconnecting"
+  | "stub"
+  | "disconnected";
+
+export type DeliveryMode = "followUp" | "steer";
+
+/* ── Sessions ── */
+
+export type SessionSummary = {
+  sessionId: string;
+  status: "working" | "idle" | "stale" | "ended";
+  taskDescription?: string;
+  project?: string;
+  tmuxSession?: string;
+  transcriptPath?: string;
+  lastEventAt?: string;
+  workstreamId?: string;
+  workstreamName?: string;
+};
+
+export type SessionDetail = {
+  sessionId: string;
+  status: "working" | "idle" | "stale" | "ended";
+  taskDescription?: string;
+  project?: string;
+  tmuxSession?: string;
+  transcriptPath?: string;
+  lastEventAt?: string;
+  startedAt?: string;
+  cwd?: string;
+  model?: string;
+  workstreamId?: string;
+  workstreamName?: string;
+  recentEvents: SessionEvent[];
+};
+
+export type SessionEvent = {
+  id: number;
+  event_name: string;
+  tool_name?: string;
+  payload?: string;
+  timestamp: string;
+};
+
+export type TmuxSessionInspection = {
+  exists: boolean;
+  attached: boolean;
+  pane?: {
+    uiState?: string;
+    currentCommand?: string;
+    target?: string;
+    panePid?: number;
+    capture?: string;
+  };
+};
+
+/* ── Transcripts ── */
+
+export type TranscriptItem = {
+  id: string;
+  kind: "message" | "tool_call" | "tool_result" | "event";
+  role?: string;
+  text?: string;
+  title?: string;
+  rawType?: string;
+  toolName?: string;
+  timestamp?: string;
+  metadata: Record<string, unknown>;
+};
+
+export type TranscriptPage = {
+  items: TranscriptItem[];
+  nextCursor?: string;
+};
+
+/* ── Status ── */
+
+export type StatusResponse = {
+  source?: string;
+  pid?: number;
+  uptime: number;
+  blackboard: string;
+  whatsapp: {
+    status: string;
+    pid?: number;
+    managedByControlSurface?: boolean;
+  };
+  pi?: {
+    sessionId?: string;
+    busy?: boolean;
+    queueDepth?: number;
+    messageCount?: number;
+    state?: string;
+  };
+  workstreams?: WorkstreamSummary[];
+};
+
+/* ── Workstreams ── */
+
+export type WorkstreamSummary = {
+  id: string;
+  name: string;
+  repoPath?: string;
+  worktreePath?: string;
+  sessionCount: number;
+  createdAt: string;
+};
+
+/* ── API responses ── */
+
+export type SessionListResponse = {
+  items: SessionSummary[];
+};
+
+export type SessionDetailResponse = {
+  session: SessionDetail;
+  tmux?: TmuxSessionInspection | null;
+};
+
+export type QueueMessageResponse = {
+  ok: boolean;
+  queueDepth: number;
+};
+
+export type DirectMessageResponse = {
+  ok: boolean;
+  delivery?: string;
+  reason?: string;
+};
+
+export type PiHistoryResponse = {
+  items: ChatTimelineItem[];
+};
+
+/* ── WebSocket messages (inbound) ── */
+
+export type WsMessage =
+  | { type: "connected"; clientId: string }
+  | { type: "message_queued"; itemId: string; queueDepth: number }
+  | { type: "queue_item_start"; item: { id: string; source: string } }
+  | { type: "queue_item_end"; itemId: string; error?: string }
+  | { type: "text_delta"; delta: string }
+  | {
+      type: "message_end";
+      role: string;
+      content?: string;
+      timestamp?: string;
+    }
+  | {
+      type: "tool_execution_start" | "tool_execution_end";
+      tool?: string;
+      toolUseId?: string;
+      args?: unknown;
+      result?: unknown;
+      isError?: boolean;
+      event?: unknown;
+      timestamp?: string;
+    }
+  | { type: "turn_end" }
+  | { type: "error"; message: string };

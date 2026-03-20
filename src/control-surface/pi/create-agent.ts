@@ -55,7 +55,7 @@ export async function createAutonomaAgent(options: CreateAutonomaAgentOptions) {
 	});
 	await resourceLoader.reload();
 
-	const model = getModel("anthropic", config.piModel);
+	const model = getModel("anthropic", config.piModel as Parameters<typeof getModel>[1]);
 	if (!model) {
 		throw new Error(`Unable to resolve Pi model: ${config.piModel}`);
 	}

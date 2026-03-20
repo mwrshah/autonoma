@@ -32,7 +32,7 @@ const server = http.createServer(async (req, res) => {
 runtime.attachServer(server);
 
 server.on("upgrade", (req, socket, head) => {
-	const handled = runtime.handleUpgrade(req, socket, head);
+	const handled = runtime.handleUpgrade(req, socket as import("node:net").Socket, head);
 	if (!handled) socket.destroy();
 });
 

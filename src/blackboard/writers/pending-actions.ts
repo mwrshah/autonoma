@@ -48,7 +48,7 @@ export function createPendingAction(db: SqlDatabase, input: CreatePendingActionI
     createdAt,
   );
 
-  return db.prepare("SELECT * FROM pending_actions WHERE action_id = ?").get(actionId) as PendingActionRow;
+  return db.prepare("SELECT * FROM pending_actions WHERE action_id = ?").get(actionId) as unknown as PendingActionRow;
 }
 
 export function resolvePendingActionByContextRef(
@@ -71,7 +71,7 @@ export function resolvePendingActionByContextRef(
      WHERE action_id = ?`
   ).run(effectiveResolvedAt, JSON.stringify(resolutionPayload), action.action_id);
 
-  return db.prepare("SELECT * FROM pending_actions WHERE action_id = ?").get(action.action_id) as PendingActionRow;
+  return db.prepare("SELECT * FROM pending_actions WHERE action_id = ?").get(action.action_id) as unknown as PendingActionRow;
 }
 
 export function resolveLatestPendingAction(

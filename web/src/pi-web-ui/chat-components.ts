@@ -27,6 +27,10 @@ import Check from "lucide/dist/esm/icons/check.js";
 import ChevronRight from "lucide/dist/esm/icons/chevron-right.js";
 import Code from "lucide/dist/esm/icons/code.js";
 import Copy from "lucide/dist/esm/icons/copy.js";
+import FileText from "lucide/dist/esm/icons/file-text.js";
+import FilePen from "lucide/dist/esm/icons/file-pen.js";
+import FolderOpen from "lucide/dist/esm/icons/folder-open.js";
+import Search from "lucide/dist/esm/icons/search.js";
 import SquareTerminal from "lucide/dist/esm/icons/square-terminal.js";
 
 hljs.registerLanguage("javascript", javascript);
@@ -406,15 +410,144 @@ function renderBashTool(
   `;
 }
 
+function paramRecord(params: unknown): Record<string, unknown> {
+  return typeof params === "object" && params ? (params as Record<string, unknown>) : {};
+}
+
+function resultText(result: ToolResultMessageType | undefined): string {
+  return result?.content
+    ?.filter((c) => c.type === "text")
+    .map((c: any) => c.text)
+    .join("\n") || "";
+}
+
+function truncateLines(text: string, max: number): { lines: string; truncated: boolean } {
+  const all = text.split("\n");
+  if (all.length <= max) return { lines: text, truncated: false };
+  return { lines: all.slice(0, max).join("\n"), truncated: true };
+}
+
+function renderEditTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const filePath = String(p.file_path ?? p.filePath ?? "");
+
+  const oldStr = String(p.old_string ?? p.oldString ?? "");
+  const newStr = String(p.new_string ?? p.newString ?? "");
+
+  const diffLines: string[] = [];
+  if (oldStr) for (const l of oldStr.split("\n")) diffLines.push(`- ${l}`);
+  if (newStr) for (const l of newStr.split("\n")) diffLines.push(`+ ${l}`);
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(FilePen, `Editing ${filePath}`)}
+      ${diffLines.length
+        ? html`<pre class="text-xs font-mono rounded-md border border-border p-2 overflow-auto max-h-64 whitespace-pre-wrap">${diffLines.map(
+            (l) =>
+              l.startsWith("- ")
+                ? html`<span class="text-red-400">${l}\n</span>`
+                : l.startsWith("+ ")
+                  ? html`<span class="text-green-400">${l}\n</span>`
+                  : html`${l}\n`,
+          )}</pre>`
+        : ""}
+      ${result?.isError ? html`<div class="text-xs text-destructive">${resultText(result)}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderWriteTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const filePath = String(p.file_path ?? p.filePath ?? "");
+  const content = String(p.content ?? "");
+  const { lines, truncated } = truncateLines(content, 10);
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(FileText, `Writing ${filePath}`)}
+      <pre class="text-xs font-mono rounded-md border border-border p-2 overflow-auto max-h-64 whitespace-pre-wrap">${lines}${truncated ? html`\n<span class="text-muted-foreground">… truncated</span>` : ""}</pre>
+      ${result?.isError ? html`<div class="text-xs text-destructive">${resultText(result)}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderReadTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const filePath = String(p.file_path ?? p.filePath ?? "");
+  const output = resultText(result);
+  const { lines, truncated } = truncateLines(output, 10);
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(FileText, `Reading ${filePath}`)}
+      ${output
+        ? html`<pre class="text-xs font-mono rounded-md border border-border p-2 overflow-auto max-h-64 whitespace-pre-wrap">${lines}${truncated ? html`\n<span class="text-muted-foreground">… truncated</span>` : ""}</pre>`
+        : ""}
+      ${result?.isError ? html`<div class="text-xs text-destructive">${output}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderGrepTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const pattern = String(p.pattern ?? "");
+  const path = String(p.path ?? ".");
+  const output = resultText(result);
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(Search, `grep ${pattern} ${path}`)}
+      ${output
+        ? html`<pre class="text-xs font-mono rounded-md border border-border p-2 overflow-auto max-h-64 whitespace-pre-wrap">${output}</pre>`
+        : ""}
+      ${result?.isError ? html`<div class="text-xs text-destructive">${output}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderLsTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const path = String(p.path ?? p.directory ?? ".");
+  const output = resultText(result);
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(FolderOpen, `ls ${path}`)}
+      ${output
+        ? html`<pre class="text-xs font-mono rounded-md border border-border p-2 overflow-auto max-h-64 whitespace-pre-wrap">${output}</pre>`
+        : ""}
+    </div>
+  `;
+}
+
 function renderTool(
   toolName: string,
   params: unknown,
   result: ToolResultMessageType | undefined,
   isStreaming?: boolean,
 ): TemplateResult {
-  if (toolName === "bash") {
-    return renderBashTool(params, result);
-  }
+  const name = toolName.toLowerCase();
+  if (name === "bash") return renderBashTool(params, result);
+  if (name === "edit") return renderEditTool(params, result);
+  if (name === "write") return renderWriteTool(params, result);
+  if (name === "read") return renderReadTool(params, result);
+  if (name === "grep") return renderGrepTool(params, result);
+  if (name === "ls" || name === "glob") return renderLsTool(params, result);
   return renderDefaultTool(params, result, isStreaming);
 }
 
@@ -436,15 +569,32 @@ function summarizeToolCall(
           ? i18n("running")
           : i18n("pending");
 
-  if (toolName === "bash") {
-    const command = typeof params === "object" && params && "command" in (params as Record<string, unknown>)
-      ? String((params as Record<string, unknown>).command ?? "")
-      : "";
+  const p = paramRecord(params);
+  const name = toolName.toLowerCase();
+
+  if (name === "bash") {
+    const command = String(p.command ?? "");
     const preview = command.length > 80 ? `${command.slice(0, 80)}…` : command;
     return {
       title: toolName,
       subtitle: preview ? `${state} • ${preview}` : state,
     };
+  }
+
+  if (name === "edit" || name === "write" || name === "read") {
+    const filePath = String(p.file_path ?? p.filePath ?? "");
+    const short = filePath.split("/").slice(-2).join("/");
+    return { title: toolName, subtitle: short ? `${state} • ${short}` : state };
+  }
+
+  if (name === "grep") {
+    const pattern = String(p.pattern ?? "");
+    return { title: toolName, subtitle: pattern ? `${state} • ${pattern}` : state };
+  }
+
+  if (name === "ls" || name === "glob") {
+    const path = String(p.path ?? p.pattern ?? p.directory ?? ".");
+    return { title: toolName, subtitle: `${state} • ${path}` };
   }
 
   return {
