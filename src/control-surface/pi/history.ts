@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import { createReadStream } from "node:fs";
 import readline from "node:readline";
-import type { PiHistoryItem, PiHistoryResponse } from "../../contracts/index.ts";
+import type { PiHistoryItem, PiHistoryMessageItem, PiHistoryResponse } from "../../contracts/index.ts";
+
+type PiHistoryMode = "agent" | "input";
+
+type PiHistoryMessageBlock = NonNullable<PiHistoryMessageItem["blocks"]>[number];
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -37,16 +41,24 @@ function pushMessage(
   content: string,
   createdAt: string,
   suffix = "message",
+  blocks?: PiHistoryMessageBlock[],
 ): void {
   const normalized = content.trim();
-  if (!normalized) return;
-  items.push({
+  const normalizedBlocks = blocks?.filter((block) =>
+    block.type === "text" ? block.text.trim() : block.thinking.trim(),
+  );
+  if (!normalized && (!normalizedBlocks || normalizedBlocks.length === 0)) return;
+  const item: PiHistoryMessageItem = {
     id: `${id}:${suffix}`,
     kind: "message",
     role,
     content: normalized,
     createdAt,
-  });
+  };
+  if (normalizedBlocks && normalizedBlocks.length > 0) {
+    item.blocks = normalizedBlocks;
+  }
+  items.push(item);
 }
 
 function parseMessageContent(
@@ -62,14 +74,25 @@ function parseMessageContent(
     return;
   }
 
-  let textBuffer: string[] = [];
+  const messageBlocks: PiHistoryMessageBlock[] = [];
+  let textBuffer = "";
   let toolIndex = 0;
   let messageIndex = 0;
 
-  const flushText = () => {
-    if (textBuffer.length === 0) return;
-    pushMessage(items, messageId, role, textBuffer.join(""), createdAt, `message-${messageIndex}`);
-    textBuffer = [];
+  const flushTextBlock = () => {
+    if (!textBuffer.trim()) return;
+    messageBlocks.push({ type: "text", text: textBuffer });
+    textBuffer = "";
+  };
+
+  const flushMessage = () => {
+    flushTextBlock();
+    if (messageBlocks.length === 0) return;
+    const contentText = messageBlocks
+      .map((block) => (block.type === "text" ? block.text : block.thinking))
+      .join("\n\n");
+    pushMessage(items, messageId, role, contentText, createdAt, `message-${messageIndex}`, [...messageBlocks]);
+    messageBlocks.length = 0;
     messageIndex += 1;
   };
 
@@ -78,12 +101,20 @@ function parseMessageContent(
     const type = typeof record.type === "string" ? record.type : undefined;
 
     if (type === "text" && typeof record.text === "string") {
-      textBuffer.push(record.text);
+      textBuffer += record.text;
+      continue;
+    }
+
+    if (type === "thinking" && role === "assistant" && typeof record.thinking === "string") {
+      flushTextBlock();
+      if (record.thinking.trim()) {
+        messageBlocks.push({ type: "thinking", thinking: record.thinking });
+      }
       continue;
     }
 
     if (type === "toolCall") {
-      flushText();
+      flushMessage();
       items.push({
         id: `${messageId}:tool-start-${toolIndex}`,
         kind: "tool",
@@ -98,7 +129,7 @@ function parseMessageContent(
     }
   }
 
-  flushText();
+  flushMessage();
 }
 
 function parseMessageRecord(messageRecord: Record<string, unknown>, createdAt: string, messageId: string, items: PiHistoryItem[]): void {
@@ -127,10 +158,6 @@ function parseMessageRecord(messageRecord: Record<string, unknown>, createdAt: s
   }
 }
 
-/**
- * Keep only the last assistant message per turn (before each user message or end of list).
- * This mirrors the live path where only `pi_surfaced` (the final assistant text) is shown.
- */
 function keepOnlySurfacedAssistant(items: PiHistoryItem[]): PiHistoryItem[] {
   const result: PiHistoryItem[] = [];
   let lastAssistantIdx = -1;
@@ -161,6 +188,20 @@ function keepOnlySurfacedAssistant(items: PiHistoryItem[]): PiHistoryItem[] {
   return result;
 }
 
+/**
+ * Strip everything except user messages and the final surfaced assistant message per turn.
+ * This mirrors the WhatsApp / InputSurface live path: no tools, no system messages.
+ */
+function keepOnlySurfaced(items: PiHistoryItem[]): PiHistoryItem[] {
+  return keepOnlySurfacedAssistant(items).filter(
+    (item) => item.kind === "message" && (item.role === "user" || item.role === "assistant"),
+  );
+}
+
+function shapeHistoryItems(items: PiHistoryItem[], mode: PiHistoryMode): PiHistoryItem[] {
+  return mode === "input" ? keepOnlySurfaced(items) : items;
+}
+
 function parseHistoryLine(line: string, lineNumber: number, items: PiHistoryItem[]): void {
   const parsed = JSON.parse(line) as Record<string, unknown>;
   if (parsed.type !== "message") return;
@@ -175,6 +216,7 @@ export function readPiHistoryFromMessages(
   sessionId: string,
   sessionFile: string | null,
   messages: Array<unknown>,
+  mode: PiHistoryMode = "agent",
 ): PiHistoryResponse {
   const items: PiHistoryItem[] = [];
 
@@ -188,11 +230,15 @@ export function readPiHistoryFromMessages(
   return {
     sessionId,
     sessionFile,
-    items: keepOnlySurfacedAssistant(items),
+    items: shapeHistoryItems(items, mode),
   };
 }
 
-export async function readPiHistory(sessionId: string, sessionFile: string): Promise<PiHistoryResponse> {
+export async function readPiHistory(
+  sessionId: string,
+  sessionFile: string,
+  mode: PiHistoryMode = "agent",
+): Promise<PiHistoryResponse> {
   if (!fs.existsSync(sessionFile)) {
     return {
       sessionId,
@@ -225,6 +271,6 @@ export async function readPiHistory(sessionId: string, sessionFile: string): Pro
   return {
     sessionId,
     sessionFile,
-    items: keepOnlySurfacedAssistant(items),
+    items: shapeHistoryItems(items, mode),
   };
 }

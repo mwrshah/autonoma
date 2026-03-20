@@ -33,7 +33,6 @@ import FolderOpen from "lucide/dist/esm/icons/folder-open.js";
 import MessageSquare from "lucide/dist/esm/icons/message-square.js";
 import Search from "lucide/dist/esm/icons/search.js";
 import SquareTerminal from "lucide/dist/esm/icons/square-terminal.js";
-import Webhook from "lucide/dist/esm/icons/webhook.js";
 
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("typescript", typescript);
@@ -316,17 +315,22 @@ export class ThinkingBlock extends LitElement {
 
     return html`
       <div class="thinking-block">
-        <div
-          class="thinking-header cursor-pointer select-none flex items-center gap-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+        <button
+          type="button"
+          class="thinking-header flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          aria-expanded=${String(this.isExpanded)}
           @click=${this.toggleExpanded}
         >
-          <span class="transition-transform inline-block ${this.isExpanded ? "rotate-90" : ""}">
-            ${unsafeHTML(iconSvg(ChevronRight, "sm"))}
+          <span class="flex min-w-0 items-center gap-2">
+            <span class="inline-block h-2 w-2 rounded-full bg-muted-foreground/45" aria-hidden="true"></span>
+            <span class="${shimmerClasses}">${i18n("Thinking…")}</span>
           </span>
-          <span class="${shimmerClasses}">${i18n("Thinking...")}</span>
-        </div>
+          <span class="shrink-0 text-[11px] uppercase tracking-[0.16em] text-muted-foreground/70">
+            ${this.isExpanded ? i18n("Hide") : i18n("Show")}
+          </span>
+        </button>
         ${this.isExpanded
-          ? html`<markdown-block .content=${this.content} .isThinking=${true}></markdown-block>`
+          ? html`<div class="pl-4 pt-1"><markdown-block .content=${this.content} .isThinking=${true}></markdown-block></div>`
           : ""}
       </div>
     `;

@@ -6,9 +6,12 @@ import { sendJson } from "./_shared.ts";
 
 export async function handleBrowserPiHistoryRoute(
   runtime: ControlSurfaceRuntime,
-  _request: http.IncomingMessage,
+  request: http.IncomingMessage,
   response: http.ServerResponse,
 ) {
+  const url = new URL(request.url ?? "/", "http://127.0.0.1");
+  const historyMode = url.searchParams.get("surface") === "input" ? "input" : "agent";
+
   const snapshot = runtime.sessionState.getSnapshot();
   if (!snapshot.sessionId) {
     const body: PiHistoryResponse = {
@@ -20,7 +23,12 @@ export async function handleBrowserPiHistoryRoute(
   }
 
   if (runtime.piSession?.sessionId === snapshot.sessionId && Array.isArray(runtime.piSession.messages)) {
-    const body = readPiHistoryFromMessages(snapshot.sessionId, snapshot.sessionFile ?? null, runtime.piSession.messages);
+    const body = readPiHistoryFromMessages(
+      snapshot.sessionId,
+      snapshot.sessionFile ?? null,
+      runtime.piSession.messages,
+      historyMode,
+    );
     if (body.items.length > 0 || !snapshot.sessionFile) {
       return sendJson(response, 200, body);
     }
@@ -35,6 +43,6 @@ export async function handleBrowserPiHistoryRoute(
     return sendJson(response, 200, body);
   }
 
-  const body = await readPiHistory(snapshot.sessionId, snapshot.sessionFile);
+  const body = await readPiHistory(snapshot.sessionId, snapshot.sessionFile, historyMode);
   return sendJson(response, 200, body);
 }

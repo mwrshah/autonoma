@@ -10,13 +10,12 @@ import { useControlSurface } from "~/hooks/use-control-surface";
 import type {
   ChatTimelineItem,
   ChatTimelineMessage,
-  ChatTimelineTool,
   ConnectionState,
   DeliveryMode,
   ImageAttachment,
   MessageSource,
 } from "~/lib/types";
-import { createId, extractToolName, parseUserMessageSource } from "~/lib/utils";
+import { createId, parseUserMessageSource } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
 import { MessageInput } from "~/components/ui/MessageInput";
 
@@ -91,8 +90,6 @@ function timelineToSurfaceEntries(timeline: ChatTimelineItem[]): SurfaceEntry[] 
     }
 
     if (item.kind === "tool") {
-      const tool = item as ChatTimelineTool;
-
       // Skip all tool calls — only user messages and pi responses shown
       // (mirrors WhatsApp: user message in, pi final text response out)
     }
@@ -218,7 +215,6 @@ export function InputSurface() {
     wsClient.connectionState,
   );
   const [isSending, setIsSending] = useState(false);
-  const activeAssistantId = useRef<string | null>(null);
   const sentTextsRef = useRef<Set<string>>(new Set());
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -237,7 +233,7 @@ export function InputSurface() {
   useEffect(() => {
     let cancelled = false;
     void apiClient
-      .getPiHistory()
+      .getPiHistory("input")
       .then((history) => {
         if (cancelled) return;
         setTimeline((current) => [...history.items, ...current]);
@@ -284,13 +280,11 @@ export function InputSurface() {
           return;
         }
 
-        activeAssistantId.current = null;
         // Don't add assistant message_end to timeline — only pi_surfaced events appear
         return;
       }
 
       if (message.type === "pi_surfaced") {
-        activeAssistantId.current = null;
         if (message.content.trim()) {
           setTimeline((current) => [
             ...current,
@@ -304,57 +298,6 @@ export function InputSurface() {
           ]);
         }
         return;
-      }
-
-      if (
-        message.type === "tool_execution_start" ||
-        message.type === "tool_execution_end"
-      ) {
-        const eventRecord =
-          message.event && typeof message.event === "object"
-            ? (message.event as Record<string, unknown>)
-            : undefined;
-
-        const toolEvent: ChatTimelineTool = {
-          id: createId("tool"),
-          kind: "tool",
-          tool: message.tool || extractToolName(message.event),
-          phase: message.type === "tool_execution_start" ? "start" : "end",
-          toolUseId: message.toolUseId,
-          args:
-            message.type === "tool_execution_start"
-              ? (message.args ??
-                eventRecord?.arguments ??
-                eventRecord?.args ??
-                eventRecord?.toolArguments)
-              : undefined,
-          result:
-            message.type === "tool_execution_end"
-              ? (message.result ??
-                eventRecord?.result ??
-                eventRecord?.output ??
-                eventRecord?.toolResult)
-              : undefined,
-          isError:
-            message.type === "tool_execution_end"
-              ? message.isError
-              : undefined,
-          createdAt: message.timestamp ?? new Date().toISOString(),
-        };
-        setTimeline((current) => [...current, toolEvent]);
-        return;
-      }
-
-      if (message.type === "turn_end") {
-        activeAssistantId.current = null;
-        setTimeline((current) => [
-          ...current,
-          {
-            id: createId("divider-turn-end"),
-            kind: "divider",
-            createdAt: new Date().toISOString(),
-          },
-        ]);
       }
     });
 

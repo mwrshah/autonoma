@@ -72,7 +72,10 @@ export function createAutonomaApiClient(
         body: JSON.stringify({ text }),
       }),
 
-    getPiHistory: () => request<PiHistoryResponse>("/api/pi/history"),
+    getPiHistory: (surface?: "input") =>
+      request<PiHistoryResponse>(
+        surface ? `/api/pi/history?surface=${surface}` : "/api/pi/history",
+      ),
 
     startWhatsApp: () =>
       request<{ ok: boolean }>("/runtime/whatsapp/start", { method: "POST" }),

@@ -124,6 +124,10 @@ export interface PiHistoryMessageItem {
   kind: "message";
   role: "user" | "assistant" | "system";
   content: string;
+  blocks?: Array<
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: string }
+  >;
   createdAt: string;
 }
 
@@ -242,4 +246,3 @@ export const CONTROL_SURFACE_ENDPOINTS = {
     auth: "bearer",
   },
 } as const;
-

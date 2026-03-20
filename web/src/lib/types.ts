@@ -12,6 +12,10 @@ export type ChatTimelineMessage = {
   kind: "message";
   role: "user" | "assistant" | "system";
   content: string;
+  blocks?: Array<
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: string }
+  >;
   images?: ImageAttachment[];
   source?: MessageSource;
   createdAt: string;

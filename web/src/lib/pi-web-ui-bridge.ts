@@ -3,8 +3,14 @@
  * components that expect AgentMessage[] format.
  */
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, TextContent, ToolCall } from "@mariozechner/pi-ai";
-import type { ChatTimelineItem, ChatTimelineTool, ImageAttachment, MessageSource } from "./types";
+import type {
+  AssistantMessage,
+  ImageContent,
+  TextContent,
+  ThinkingContent,
+  ToolCall,
+} from "@mariozechner/pi-ai";
+import type { ChatTimelineItem, ChatTimelineMessage, ImageAttachment, MessageSource } from "./types";
 import { parseUserMessageSource } from "./utils";
 
 function stringifyResult(value: unknown): string {
@@ -15,6 +21,19 @@ function stringifyResult(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function assistantBlocksToContent(message: ChatTimelineMessage): AssistantMessage["content"] {
+  if (!message.blocks?.length) {
+    return message.content.trim() ? [{ type: "text", text: message.content }] : [];
+  }
+
+  return message.blocks.flatMap((block): Array<TextContent | ThinkingContent> => {
+    if (block.type === "text") {
+      return block.text.trim() ? [{ type: "text", text: block.text }] : [];
+    }
+    return block.thinking.trim() ? [{ type: "thinking", thinking: block.thinking }] : [];
+  });
 }
 
 /**
@@ -59,6 +78,7 @@ export function timelineToAgentMessages(
     }
 
     if (item.kind === "message" && item.role === "assistant") {
+      const message = item as ChatTimelineMessage;
       // Look ahead for immediately following tool starts (before next message/divider)
       const toolCalls: ToolCall[] = [];
       for (let j = i + 1; j < timeline.length; j++) {
@@ -75,10 +95,7 @@ export function timelineToAgentMessages(
         }
       }
 
-      const content: AssistantMessage["content"] = [];
-      if (item.content.trim()) {
-        content.push({ type: "text", text: item.content });
-      }
+      const content: AssistantMessage["content"] = assistantBlocksToContent(message);
       content.push(...toolCalls);
 
       messages.push({
