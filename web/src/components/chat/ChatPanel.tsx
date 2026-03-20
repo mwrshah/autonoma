@@ -419,7 +419,7 @@ export function ChatPanel() {
         pendingImages={pendingImages}
         onAddImages={addImageFiles}
         onRemoveImage={removeImage}
-        rows={3}
+        rows={2}
       />
     </div>
   );
