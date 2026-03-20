@@ -17,6 +17,7 @@ import type {
 } from "~/lib/types";
 import { createId, parseUserMessageSource } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
+import { MarkdownContent } from "~/components/ui/MarkdownContent";
 import { MessageInput } from "~/components/ui/MessageInput";
 
 /* ── Types ── */
@@ -160,9 +161,7 @@ function PiResponseEntry({ entry }: { entry: SurfaceEntry & { kind: "pi-response
         </div>
       </div>
       <div className="flex-1 min-w-0 rounded-lg border border-border bg-muted/30 px-3 py-2">
-        <p className="text-sm text-foreground whitespace-pre-wrap break-words">
-          {entry.content}
-        </p>
+        <MarkdownContent>{entry.content}</MarkdownContent>
       </div>
     </div>
   );

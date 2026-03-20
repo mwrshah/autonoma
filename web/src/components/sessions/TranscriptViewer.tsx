@@ -1,10 +1,9 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useControlSurface } from "~/hooks/use-control-surface";
 import type { TranscriptItem } from "~/lib/types";
 import { cn, formatDateTime, prettifyJson } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
+import { MarkdownContent } from "~/components/ui/MarkdownContent";
 import { Button } from "~/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/Card";
 
@@ -27,9 +26,7 @@ function TranscriptRow({ item }: { item: TranscriptItem }) {
             {formatDateTime(item.timestamp ?? undefined)}
           </span>
         </div>
-        <div className="markdown-body text-sm">
-          <Markdown remarkPlugins={[remarkGfm]}>{item.text ?? ""}</Markdown>
-        </div>
+        <MarkdownContent>{item.text ?? ""}</MarkdownContent>
       </div>
     );
   }
