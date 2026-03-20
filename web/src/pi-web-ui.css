@@ -501,3 +501,21 @@ body {
 	backdrop-filter: blur(10px);
 	max-width: 100%;
 }
+
+/* Source badges for multi-channel messages */
+.source-badge-whatsapp {
+	color: #25d366;
+}
+.source-badge-hook {
+	color: #8b5cf6;
+}
+.source-badge-cron {
+	color: #06b6d4;
+}
+.source-badge-web {
+	color: var(--muted-foreground);
+}
+.source-badge-whatsapp-bg {
+	background: rgba(37, 211, 102, 0.08);
+	border-color: rgba(37, 211, 102, 0.25);
+}

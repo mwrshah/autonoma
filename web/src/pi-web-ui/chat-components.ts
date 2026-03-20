@@ -30,8 +30,11 @@ import Copy from "lucide/dist/esm/icons/copy.js";
 import FileText from "lucide/dist/esm/icons/file-text.js";
 import FilePen from "lucide/dist/esm/icons/file-pen.js";
 import FolderOpen from "lucide/dist/esm/icons/folder-open.js";
+import MessageSquare from "lucide/dist/esm/icons/message-square.js";
 import Search from "lucide/dist/esm/icons/search.js";
+import Send from "lucide/dist/esm/icons/send.js";
 import SquareTerminal from "lucide/dist/esm/icons/square-terminal.js";
+import Webhook from "lucide/dist/esm/icons/webhook.js";
 
 hljs.registerLanguage("javascript", javascript);
 hljs.registerLanguage("typescript", typescript);
@@ -535,6 +538,48 @@ function renderLsTool(
   `;
 }
 
+function renderSendWhatsAppTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const text = String(p.text ?? "");
+  const output = resultText(result);
+  const succeeded = result && !result.isError;
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(Send, succeeded ? i18n("Sent to WhatsApp") : i18n("Sending to WhatsApp..."))}
+      ${text
+        ? html`<div class="rounded-lg border border-border px-3 py-2 text-sm source-badge-whatsapp-bg">
+            <markdown-block .content=${text}></markdown-block>
+          </div>`
+        : ""}
+      ${result?.isError ? html`<div class="text-xs text-destructive">${output}</div>` : ""}
+    </div>
+  `;
+}
+
+function renderSendToUserTool(
+  params: unknown,
+  result: ToolResultMessageType | undefined,
+): TemplateResult {
+  const p = paramRecord(params);
+  const text = String(p.text ?? p.message ?? "");
+
+  return html`
+    <div class="space-y-2">
+      ${renderToolHeader(MessageSquare, i18n("Notifying user"))}
+      ${text
+        ? html`<div class="rounded-lg border border-border px-3 py-2 text-sm">
+            <markdown-block .content=${text}></markdown-block>
+          </div>`
+        : ""}
+      ${result?.isError ? html`<div class="text-xs text-destructive">${resultText(result)}</div>` : ""}
+    </div>
+  `;
+}
+
 function renderTool(
   toolName: string,
   params: unknown,
@@ -548,6 +593,8 @@ function renderTool(
   if (name === "read") return renderReadTool(params, result);
   if (name === "grep") return renderGrepTool(params, result);
   if (name === "ls" || name === "glob") return renderLsTool(params, result);
+  if (name === "send_whatsapp") return renderSendWhatsAppTool(params, result);
+  if (name === "send_to_user") return renderSendToUserTool(params, result);
   return renderDefaultTool(params, result, isStreaming);
 }
 
@@ -597,14 +644,37 @@ function summarizeToolCall(
     return { title: toolName, subtitle: `${state} • ${path}` };
   }
 
+  if (name === "send_whatsapp") {
+    const text = String(p.text ?? "");
+    const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    return { title: "WhatsApp", subtitle: preview ? `${state} • ${preview}` : state };
+  }
+
+  if (name === "send_to_user") {
+    const text = String(p.text ?? p.message ?? "");
+    const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+    return { title: "Notify User", subtitle: preview ? `${state} • ${preview}` : state };
+  }
+
   return {
     title: toolName,
     subtitle: state,
   };
 }
 
+type SourceMeta = { label: string; cssClass: string };
+
+const SOURCE_STYLES: Record<string, SourceMeta> = {
+  whatsapp: { label: "WhatsApp", cssClass: "source-badge-whatsapp" },
+  hook: { label: "Hook", cssClass: "source-badge-hook" },
+  cron: { label: "Cron", cssClass: "source-badge-cron" },
+  web: { label: "Web", cssClass: "source-badge-web" },
+};
+
 export class UserMessage extends LitElement {
-  @property({ type: Object }) message!: UserMessageWithAttachments | UserMessageType;
+  @property({ type: Object }) message!:
+    | (UserMessageWithAttachments & { source?: string })
+    | (UserMessageType & { source?: string });
 
   protected override createRenderRoot(): HTMLElement | DocumentFragment {
     return this;
@@ -620,10 +690,18 @@ export class UserMessage extends LitElement {
       ? this.message.content
       : this.message.content.find((chunk) => chunk.type === "text")?.text || "";
 
+    const source = (this.message as any).source as string | undefined;
+    const meta = source && source !== "web" ? SOURCE_STYLES[source] : undefined;
+
     return html`
       <div class="flex justify-start mx-4">
-        <div class="user-message-container py-2 px-4 rounded-xl">
-          <markdown-block .content=${content}></markdown-block>
+        <div>
+          ${meta
+            ? html`<div class="text-[10px] font-medium mb-1 ${meta.cssClass}">${meta.label}</div>`
+            : ""}
+          <div class="user-message-container py-2 px-4 rounded-xl">
+            <markdown-block .content=${content}></markdown-block>
+          </div>
         </div>
       </div>
     `;

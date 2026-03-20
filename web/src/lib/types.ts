@@ -1,10 +1,13 @@
 /* ── Chat timeline ── */
 
+export type MessageSource = "web" | "whatsapp" | "hook" | "cron";
+
 export type ChatTimelineMessage = {
   id: string;
   kind: "message";
   role: "user" | "assistant" | "system";
   content: string;
+  source?: MessageSource;
   createdAt: string;
 };
 

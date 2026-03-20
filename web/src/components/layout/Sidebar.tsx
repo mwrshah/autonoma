@@ -58,9 +58,14 @@ function StatusDot({
   );
 }
 
-/* Simple inline SVG icons — no dependency needed for 4 icons */
+/* Simple inline SVG icons — no dependency needed */
 const icons = {
-  chat: (
+  inputSurface: (
+    <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
+      <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h11A1.5 1.5 0 0 1 15 3.5v1A1.5 1.5 0 0 1 13.5 6h-11A1.5 1.5 0 0 1 1 4.5v-1ZM1 8.5A1.5 1.5 0 0 1 2.5 7h11A1.5 1.5 0 0 1 15 8.5v1A1.5 1.5 0 0 1 13.5 11h-11A1.5 1.5 0 0 1 1 9.5v-1ZM2.5 12A1.5 1.5 0 0 0 1 13.5v.5h14v-.5a1.5 1.5 0 0 0-1.5-1.5h-11Z" />
+    </svg>
+  ),
+  piAgent: (
     <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
       <path d="M2 3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H5.5L3 13.5V11H3a1 1 0 0 1-1-1V3Z" />
     </svg>
@@ -172,8 +177,9 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className="px-3 py-3 space-y-0.5">
-        <NavItem to="/" label="Chat" icon={icons.chat} />
-        <NavItem to="/sessions" label="Sessions" icon={icons.sessions} />
+        <NavItem to="/" label="Input Surface" icon={icons.inputSurface} />
+        <NavItem to="/pi" label="Pi Agent" icon={icons.piAgent} />
+        <NavItem to="/sessions" label="Claude Code" icon={icons.sessions} />
         <NavItem to="/runtime" label="Runtime" icon={icons.runtime} />
       </nav>
 

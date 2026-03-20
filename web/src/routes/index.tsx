@@ -1,13 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { ChatPanel } from "~/components/chat/ChatPanel";
+import { InputSurface } from "~/components/input-surface/InputSurface";
 
 export const Route = createFileRoute("/")({
   head: () => ({
-    meta: [{ title: "Autonoma — Chat" }],
+    meta: [{ title: "Autonoma — Input Surface" }],
   }),
-  component: ChatPage,
+  component: InputSurfacePage,
 });
 
-function ChatPage() {
-  return <ChatPanel />;
+function InputSurfacePage() {
+  return <InputSurface />;
 }

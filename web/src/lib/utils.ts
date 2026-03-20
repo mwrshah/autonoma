@@ -72,6 +72,33 @@ export function safeJsonParse<T>(raw: string | null | undefined): T | null {
   }
 }
 
+import type { MessageSource } from "./types";
+
+/**
+ * Parse source label and clean content from Pi-formatted user messages.
+ * Formats: `[WhatsApp] User (ref:XXXXX): text`, `[Web] User: "text"`, `[Hook: EventName] text`
+ */
+export function parseUserMessageSource(content: string): {
+  source: MessageSource;
+  cleanContent: string;
+} {
+  const waMatch = content.match(
+    /^\[WhatsApp\] User(?:\s*\(ref:[^)]*\))?:\s*(.*)/s,
+  );
+  if (waMatch) return { source: "whatsapp", cleanContent: waMatch[1] };
+
+  const webMatch = content.match(/^\[Web\] User:\s*"(.*)"/s);
+  if (webMatch) return { source: "web", cleanContent: webMatch[1] };
+
+  const hookMatch = content.match(/^\[Hook(?::\s*[^\]]+)?\]\s*(.*)/s);
+  if (hookMatch) return { source: "hook", cleanContent: hookMatch[1] };
+
+  const cronMatch = content.match(/^\[Cron\]\s*(.*)/s);
+  if (cronMatch) return { source: "cron", cleanContent: cronMatch[1] };
+
+  return { source: "web", cleanContent: content };
+}
+
 export function extractToolName(event: unknown): string {
   if (typeof event === "object" && event !== null) {
     const record = event as Record<string, unknown>;

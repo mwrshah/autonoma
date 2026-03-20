@@ -33,24 +33,10 @@ export async function createAutonomaAgent(options: CreateAutonomaAgentOptions) {
 	const modelRegistry = new ModelRegistry(authStorage, path.join(config.controlSurfaceAgentDir, "models.json"));
 	const settingsManager = SettingsManager.inMemory();
 	const resourceLoader = new DefaultResourceLoader({
-		cwd: HOME,
+		cwd: PROJECT_ROOT,
 		agentDir: config.controlSurfaceAgentDir,
 		settingsManager,
-		additionalSkillPaths: [
-			path.join(PROJECT_ROOT, ".pi", "skills"),
-			path.join(HOME, ".agents", "skills"),
-		].filter((entry) => fs.existsSync(entry)),
-		additionalExtensionPaths: fs.existsSync(path.join(PROJECT_ROOT, ".pi", "extensions"))
-			? [path.join(PROJECT_ROOT, ".pi", "extensions")]
-			: [],
-		agentsFilesOverride: (base) => {
-			const files = [...base.agentsFiles];
-			const agentsPath = path.join(PROJECT_ROOT, "AGENTS.md");
-			if (fs.existsSync(agentsPath)) {
-				files.push({ path: agentsPath, content: fs.readFileSync(agentsPath, "utf8") });
-			}
-			return { agentsFiles: files };
-		},
+		additionalSkillPaths: [path.join(HOME, ".agents", "skills")].filter((entry) => fs.existsSync(entry)),
 		systemPromptOverride: () => fs.readFileSync(config.controlSurfacePromptPath, "utf8"),
 	});
 	await resourceLoader.reload();

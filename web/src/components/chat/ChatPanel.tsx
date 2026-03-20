@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useControlSurface } from "~/hooks/use-control-surface";
 import {
   timelineToAgentMessages,
@@ -11,7 +11,7 @@ import type {
   ConnectionState,
   DeliveryMode,
 } from "~/lib/types";
-import { createId, extractToolName } from "~/lib/utils";
+import { createId, extractToolName, parseUserMessageSource } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
 import { Button } from "~/components/ui/Button";
 import { PiMessageList } from "./PiMessageList";
@@ -65,6 +65,7 @@ export function ChatPanel() {
   const sentTextsRef = useRef<Set<string>>(new Set());
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const isAtBottomRef = useRef(true);
 
   const addPill = (pill: StatusPill) =>
     setStatusPills((prev) => {
@@ -125,9 +126,14 @@ export function ChatPanel() {
       }
 
       if (message.type === "queue_item_start") {
+        const sourceLabel =
+          message.item.source === "whatsapp" ? "WhatsApp" :
+          message.item.source === "hook" ? "Hook" :
+          message.item.source === "cron" ? "Cron" : "Web";
         addPill({
           id: `processing-${message.item.id}`,
-          label: `Processing ${message.item.source}`,
+          label: `Processing ${sourceLabel} message`,
+          variant: message.item.source !== "web" ? "info" : undefined,
         });
         return;
       }
@@ -163,13 +169,15 @@ export function ChatPanel() {
             }
           }
           if (content.trim()) {
+            const parsed = parseUserMessageSource(content);
             setTimeline((current) => [
               ...current,
               {
                 id: createId("user"),
                 kind: "message",
                 role: "user",
-                content,
+                content: parsed.cleanContent,
+                source: parsed.source,
                 createdAt: message.timestamp ?? new Date().toISOString(),
               },
             ]);
@@ -265,12 +273,28 @@ export function ChatPanel() {
     };
   }, [wsClient]);
 
-  // Auto-scroll
+  // Track whether the user is at the bottom of the scroll container
+  const handleScroll = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const threshold = 50;
+    isAtBottomRef.current =
+      el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+  }, []);
+
   useEffect(() => {
     const el = viewportRef.current;
     if (!el) return;
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, [handleScroll]);
+
+  // Auto-scroll only when user is already at the bottom
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el || !isAtBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [agentMessages, streamingText]);
+  }, [agentMessages, streamingText, timeline]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -279,6 +303,7 @@ export function ChatPanel() {
 
     setIsSending(true);
     setDraft("");
+    isAtBottomRef.current = true;
 
     setTimeline((current) => [
       ...current,
@@ -391,8 +416,8 @@ export function ChatPanel() {
             </div>
           </div>
           <p className="text-[10px] text-muted-foreground/50">
-            Ctrl+Enter to send. Falls back to HTTP POST if WebSocket
-            unavailable.
+            <span className="font-medium text-muted-foreground/70">Web channel</span>
+            {" "}&middot; Ctrl+Enter to send &middot; Pi sees all channels (WhatsApp, Hooks, Cron)
           </p>
         </form>
       </div>

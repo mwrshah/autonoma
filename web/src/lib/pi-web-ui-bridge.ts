@@ -4,7 +4,8 @@
  */
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolCall } from "@mariozechner/pi-ai";
-import type { ChatTimelineItem, ChatTimelineTool } from "./types";
+import type { ChatTimelineItem, ChatTimelineTool, MessageSource } from "./types";
+import { parseUserMessageSource } from "./utils";
 
 function stringifyResult(value: unknown): string {
   if (value == null) return "";
@@ -36,11 +37,16 @@ export function timelineToAgentMessages(
     if (item.kind === "divider") continue;
 
     if (item.kind === "message" && item.role === "user") {
+      // Parse source label from formatted content and attach as metadata
+      const parsed = item.source
+        ? { source: item.source, cleanContent: item.content }
+        : parseUserMessageSource(item.content);
       messages.push({
         role: "user",
-        content: item.content,
+        content: parsed.cleanContent,
         timestamp: new Date(item.createdAt).getTime(),
-      } as AgentMessage);
+        source: parsed.source,
+      } as AgentMessage & { source: MessageSource });
       continue;
     }
 
