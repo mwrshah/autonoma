@@ -37,7 +37,7 @@ Pi is reactive in v1 — triggered by human messages and Claude Code hook events
 │  │           Embedded Pi Agent (SDK)            │        │
 │  │  Persistent session · auto-compacting        │        │
 │  │  Serialized turn queue                       │        │
-│  │  Tools: send_whatsapp, query_blackboard,      │        │
+│  │  Tools: send_to_user, query_blackboard,      │        │
 │  │         reload_resources, read, bash, grep   │        │
 │  │  Skills: Todoist, tmux-2, Autonoma workflows │        │
 │  └──────────────────────────────────────────────┘        │
