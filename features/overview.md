@@ -8,7 +8,7 @@ Every inbound message (WhatsApp or web client) passes through a stateless router
 
 Pi receives messages tagged with workstream context and acts accordingly: creating git worktrees for workstreams that involve code changes, launching Claude Code sessions in tmux (tagged to the workstream), and managing wave execution through prompt-based coordination. When Pi enriches a workstream (choosing the repo, creating the worktree), it writes the repo path and worktree path back to the workstream row.
 
-Claude Code sessions report lifecycle events via hooks that POST to the control surface. When a session completes, Pi is notified and decides whether to launch follow-up work, wait for other sessions in the wave, or notify the user. Pi communicates with the user through a unified tool (`send_to_user`) that pushes to both WhatsApp and the web client simultaneously.
+Claude Code sessions report lifecycle events via hooks that POST to the control surface. When a session completes, Pi is notified and decides whether to launch follow-up work, wait for other sessions in the wave, or notify the user. Pi's final text response each turn is automatically extracted by the runtime and pushed to both WhatsApp and the web client simultaneously — no explicit tool call needed.
 
 Pi is reactive in v1 — triggered by human messages and Claude Code hook events. There is no cron-driven proactive behavior yet. Pi can read Todoist when asked and annotate tasks, but never autonomously completes them. Workstream rows are ephemeral — created by the router, enriched by Pi, and deleted by Pi when the workstream is done (along with git worktree cleanup).
 
@@ -37,7 +37,7 @@ Pi is reactive in v1 — triggered by human messages and Claude Code hook events
 │  │           Embedded Pi Agent (SDK)            │        │
 │  │  Persistent session · auto-compacting        │        │
 │  │  Serialized turn queue                       │        │
-│  │  Tools: send_to_user, query_blackboard,      │        │
+│  │  Tools: query_blackboard,      │        │
 │  │         reload_resources, read, bash, grep   │        │
 │  │  Skills: Todoist, tmux-2, Autonoma workflows │        │
 │  └──────────────────────────────────────────────┘        │
@@ -111,7 +111,7 @@ Workstreams are ephemeral. An open workstream has a row in the `workstreams` tab
 - **Single embedded Pi (v1)**: only the control surface hosts Pi. Future versions will support multiple orchestrator Pi agents per workstream.
 - **Router classifies all inbound**: every human message passes through the stateless router before reaching Pi. Hook events bypass the router.
 - **Workstreams are the unit of work**: Pi manages work through workstreams, each with its own git worktree and associated Claude Code sessions.
-- **Unified comms**: a single Pi tool (`send_to_user`) pushes to WhatsApp and the web client simultaneously. Bidirectional sync — replies from either surface appear on both.
+- **Unified comms**: Pi's final text response is automatically surfaced to WhatsApp and the web client by the runtime. Bidirectional sync — replies from either surface appear on both.
 - **Wave execution is prompt-driven**: Pi coordinates Claude Code session waves through its instructions, not infrastructure. No wave table or completion counting in code.
 - **Channels are transports**: WhatsApp, web app, and hooks all push events into the control surface. Context lives in Pi and the blackboard, never in the surface.
 - **Pi is the brain**: orchestration intelligence lives in the embedded Pi session, not in disconnected wrappers.
