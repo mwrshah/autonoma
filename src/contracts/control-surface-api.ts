@@ -107,6 +107,7 @@ export interface HookResponse {
   ok: boolean;
   queued?: boolean;
   filtered?: boolean;
+  bookkeeping?: boolean;
   queueDepth?: number;
 }
 

@@ -253,7 +253,12 @@ export class ControlSurfaceRuntime {
 			}
 		}
 
-		// Forward to Pi agent queue
+		// Only forward "stop" events to Pi — that's when a session goes idle and Pi needs to decide next steps.
+		// session-start and session-end are bookkeeping only (already written to SQLite above).
+		if (normalized !== "stop") {
+			return { ok: true, queued: false, bookkeeping: true };
+		}
+
 		const text = formatHookMessage(normalized, payload);
 		const queued = this.enqueue({
 			text,
