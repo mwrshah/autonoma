@@ -78,6 +78,7 @@ export interface MessageRequest {
   source?: MessageSource;
   metadata?: Record<string, unknown>;
   deliveryMode?: DeliveryMode;
+  images?: Array<{ data: string; mimeType: string }>;
 }
 
 export interface MessageResponse {

@@ -686,9 +686,11 @@ export class UserMessage extends LitElement {
   }
 
   override render() {
-    const content = typeof this.message.content === "string"
-      ? this.message.content
-      : this.message.content.find((chunk) => chunk.type === "text")?.text || "";
+    const contentArr = typeof this.message.content === "string"
+      ? [{ type: "text" as const, text: this.message.content }]
+      : this.message.content;
+    const textContent = contentArr.find((chunk) => chunk.type === "text") as TextContent | undefined;
+    const imageBlocks = contentArr.filter((chunk) => chunk.type === "image") as ImageContent[];
 
     const source = (this.message as any).source as string | undefined;
     const meta = source && source !== "web" ? SOURCE_STYLES[source] : undefined;
@@ -700,7 +702,18 @@ export class UserMessage extends LitElement {
             ? html`<div class="text-[10px] font-medium mb-1 ${meta.cssClass}">${meta.label}</div>`
             : ""}
           <div class="user-message-container py-2 px-4 rounded-xl">
-            <markdown-block .content=${content}></markdown-block>
+            ${textContent?.text ? html`<markdown-block .content=${textContent.text}></markdown-block>` : ""}
+            ${imageBlocks.length > 0 ? html`
+              <div class="flex flex-wrap gap-2 ${textContent?.text ? "mt-2" : ""}">
+                ${imageBlocks.map((img) => html`
+                  <img
+                    src="data:${img.mimeType};base64,${img.data}"
+                    alt="Attached image"
+                    class="rounded-lg max-w-[240px] max-h-[240px] object-contain"
+                  />
+                `)}
+              </div>
+            ` : ""}
           </div>
         </div>
       </div>

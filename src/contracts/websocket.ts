@@ -2,10 +2,16 @@ import type { DeliveryMode, MessageSource } from "./control-surface-api.ts";
 
 export const CONTROL_SURFACE_WS_PATH = "/ws";
 
+export interface ImageAttachment {
+  data: string;
+  mimeType: string;
+}
+
 export interface WebSocketClientMessageEvent {
   type: "message";
   text: string;
   deliveryMode?: DeliveryMode;
+  images?: ImageAttachment[];
 }
 
 export type ControlSurfaceWebSocketClientEvent = WebSocketClientMessageEvent;

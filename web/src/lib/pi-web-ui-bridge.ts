@@ -3,8 +3,8 @@
  * components that expect AgentMessage[] format.
  */
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ToolCall } from "@mariozechner/pi-ai";
-import type { ChatTimelineItem, ChatTimelineTool, MessageSource } from "./types";
+import type { AssistantMessage, ImageContent, TextContent, ToolCall } from "@mariozechner/pi-ai";
+import type { ChatTimelineItem, ChatTimelineTool, ImageAttachment, MessageSource } from "./types";
 import { parseUserMessageSource } from "./utils";
 
 function stringifyResult(value: unknown): string {
@@ -41,9 +41,17 @@ export function timelineToAgentMessages(
       const parsed = item.source
         ? { source: item.source, cleanContent: item.content }
         : parseUserMessageSource(item.content);
+      const images = item.images;
+      let content: string | (TextContent | ImageContent)[] = parsed.cleanContent;
+      if (images?.length) {
+        content = [
+          { type: "text", text: parsed.cleanContent },
+          ...images.map((img: ImageAttachment) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType })),
+        ];
+      }
       messages.push({
         role: "user",
-        content: parsed.cleanContent,
+        content,
         timestamp: new Date(item.createdAt).getTime(),
         source: parsed.source,
       } as AgentMessage & { source: MessageSource });

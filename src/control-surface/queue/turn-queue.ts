@@ -10,6 +10,7 @@ export type QueueItem = {
   receivedAt: string;
   webClientId?: string;
   deliveryMode?: DeliveryMode;
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
 };
 
 type TurnQueueOptions = {

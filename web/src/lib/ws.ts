@@ -102,16 +102,20 @@ export class AutonomaWsClient {
     }, delay);
   }
 
-  async sendMessage(text: string, deliveryMode: string): Promise<void> {
+  async sendMessage(
+    text: string,
+    deliveryMode: string,
+    images?: Array<{ data: string; mimeType: string }>,
+  ): Promise<void> {
     if (
       !this.socket ||
       this.socket.readyState !== WebSocket.OPEN
     ) {
       throw new Error("WebSocket not connected");
     }
-    this.socket.send(
-      JSON.stringify({ type: "message", text, deliveryMode }),
-    );
+    const payload: Record<string, unknown> = { type: "message", text, deliveryMode };
+    if (images?.length) payload.images = images;
+    this.socket.send(JSON.stringify(payload));
   }
 
   subscribe(fn: WsSubscriber): () => void {

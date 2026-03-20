@@ -49,6 +49,7 @@ type EnqueueInput = {
 	metadata?: Record<string, unknown>;
 	deliveryMode?: DeliveryMode;
 	webClientId?: string;
+	images?: Array<{ data: string; mimeType: string }>;
 };
 
 const ACCEPTED_HOOK_EVENTS = new Set(["session-start", "stop", "session-end"]);
@@ -185,6 +186,7 @@ export class ControlSurfaceRuntime {
 	}
 
 	enqueue(input: EnqueueInput): { ok: true; queued: true; queueDepth: number; item: QueueItem } {
+		const images = input.images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
 		const item: QueueItem = {
 			id: crypto.randomUUID(),
 			source: input.source,
@@ -193,6 +195,7 @@ export class ControlSurfaceRuntime {
 			receivedAt: new Date().toISOString(),
 			webClientId: input.webClientId,
 			deliveryMode: input.deliveryMode ?? "followUp",
+			images: images?.length ? images : undefined,
 		};
 		const queueDepth = this.queue.enqueue(item);
 		this.log(`queued ${item.source} item ${item.id} depth=${queueDepth}`);
@@ -335,9 +338,12 @@ export class ControlSurfaceRuntime {
 		const promptAt = this.sessionState.notePrompt(this.piSession.messages.length);
 		touchPiPrompt(this.blackboard, this.piSession.sessionId, promptAt, "active");
 		if (this.piSession.isStreaming) {
-			await this.piSession.prompt(item.text, { streamingBehavior: item.deliveryMode ?? "followUp" });
+			await this.piSession.prompt(item.text, {
+				streamingBehavior: item.deliveryMode ?? "followUp",
+				images: item.images,
+			});
 		} else {
-			await this.piSession.prompt(item.text);
+			await this.piSession.prompt(item.text, { images: item.images });
 		}
 		this.sessionState.noteEvent(this.piSession.messages.length);
 	}
@@ -547,6 +553,7 @@ export class ControlSurfaceRuntime {
 				metadata: { via: "ws" },
 				webClientId: client.id,
 				deliveryMode: payload.deliveryMode === "steer" ? "steer" : "followUp",
+				images: Array.isArray(payload.images) ? payload.images : undefined,
 			});
 			this.wsHub.send(client.id, { type: "message_queued", itemId: queued.item.id, queueDepth: queued.queueDepth });
 		}

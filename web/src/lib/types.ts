@@ -2,11 +2,17 @@
 
 export type MessageSource = "web" | "whatsapp" | "hook" | "cron";
 
+export type ImageAttachment = {
+  data: string;
+  mimeType: string;
+};
+
 export type ChatTimelineMessage = {
   id: string;
   kind: "message";
   role: "user" | "assistant" | "system";
   content: string;
+  images?: ImageAttachment[];
   source?: MessageSource;
   createdAt: string;
 };

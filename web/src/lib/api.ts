@@ -59,6 +59,7 @@ export function createAutonomaApiClient(
       text: string;
       source: string;
       deliveryMode: string;
+      images?: Array<{ data: string; mimeType: string }>;
     }) =>
       request<QueueMessageResponse>("/message", {
         method: "POST",

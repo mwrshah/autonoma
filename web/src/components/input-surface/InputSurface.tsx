@@ -277,7 +277,15 @@ export function InputSurface() {
 
   const entries = useMemo(() => timelineToSurfaceEntries(timeline), [timeline]);
 
-  // Hydrate from history
+  // Scroll viewport to bottom (used on mount and after history hydration)
+  const scrollToBottom = useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = viewportRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, []);
+
+  // Hydrate from history, then scroll to bottom
   useEffect(() => {
     let cancelled = false;
     void apiClient
@@ -285,12 +293,13 @@ export function InputSurface() {
       .then((history) => {
         if (cancelled) return;
         setTimeline((current) => [...history.items, ...current]);
+        scrollToBottom();
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [apiClient]);
+  }, [apiClient, scrollToBottom]);
 
   // WebSocket events — same as ChatPanel but we store into timeline
   useEffect(() => {

@@ -26,6 +26,7 @@ export async function handleMessageRoute(runtime: ControlSurfaceRuntime, req: ht
     source,
     metadata: body.metadata,
     deliveryMode,
+    images: Array.isArray(body.images) ? body.images : undefined,
   });
 
   const response: MessageResponse = { ok: true, queued: true, queueDepth: queued.queueDepth };
