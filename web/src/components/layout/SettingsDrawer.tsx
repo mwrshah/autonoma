@@ -1,6 +1,13 @@
 import { useControlSurface } from "~/hooks/use-control-surface";
+import { useTheme } from "~/hooks/use-theme";
 import { Button } from "~/components/ui/Button";
 import { Input } from "~/components/ui/Input";
+
+const themeOptions = [
+  { value: "light" as const, label: "Light", icon: "☀️" },
+  { value: "dark" as const, label: "Dark", icon: "🌙" },
+  { value: "system" as const, label: "System", icon: "💻" },
+];
 
 export function SettingsDrawer({
   open,
@@ -10,6 +17,7 @@ export function SettingsDrawer({
   onClose: () => void;
 }) {
   const { settings, updateSettings } = useControlSurface();
+  const { theme, setTheme } = useTheme();
 
   if (!open) return null;
 
@@ -34,6 +42,29 @@ export function SettingsDrawer({
         </div>
 
         <div className="flex-1 overflow-auto px-5 py-4 space-y-5">
+          {/* Theme */}
+          <section className="space-y-3">
+            <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Theme
+            </h3>
+            <div className="flex gap-1.5">
+              {themeOptions.map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setTheme(opt.value)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    theme === opt.value
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-muted text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <span>{opt.icon}</span>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
           {/* Connection */}
           <section className="space-y-3">
             <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">

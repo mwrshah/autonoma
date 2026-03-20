@@ -346,44 +346,46 @@ export class ControlSurfaceRuntime {
 			await this.piSession.prompt(item.text, { images: item.images });
 		}
 		this.sessionState.noteEvent(this.piSession.messages.length);
+
+		// Auto-surface final assistant message to WhatsApp
+		const finalText = this.extractFinalAssistantText();
+		if (finalText) {
+			try {
+				await this.sendWhatsAppCommand({
+					command: "send",
+					text: `*B-bot:*\n---\n${finalText}`,
+					contextRef: null,
+				});
+				this.wsHub.broadcast({ type: "pi_surfaced", content: finalText, timestamp: new Date().toISOString() });
+			} catch (error) {
+				this.log(`auto-surface to WhatsApp failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+	}
+
+	private extractFinalAssistantText(): string | undefined {
+		if (!this.piSession?.messages?.length) return undefined;
+		// Walk backwards to find the last assistant message
+		for (let i = this.piSession.messages.length - 1; i >= 0; i--) {
+			const msg = this.piSession.messages[i] as Record<string, unknown> | undefined;
+			if (!msg || msg.role !== "assistant") continue;
+			const content = msg.content;
+			if (typeof content === "string" && content.trim()) return content.trim();
+			if (Array.isArray(content)) {
+				// Extract text blocks, skip tool_use blocks
+				const textParts = content
+					.filter((block: any) => block?.type === "text" && typeof block.text === "string")
+					.map((block: any) => block.text)
+					.join("");
+				if (textParts.trim()) return textParts.trim();
+			}
+			return undefined;
+		}
+		return undefined;
 	}
 
 	private createCustomTools(): Array<any> {
 		return [
-			{
-				name: "send_whatsapp",
-				label: "Send WhatsApp",
-				description: "Send a WhatsApp message through the runtime-owned daemon.",
-				parameters: {
-					type: "object",
-					properties: {
-						text: { type: "string", description: "Message text to send" },
-						contextRef: { type: "string", description: "Optional reply-matching context" },
-						expectReply: { type: "boolean", description: "Create a pending action for a reply" },
-						kind: { type: "string", description: "Pending action kind when expectReply is true" },
-						relatedSessionId: { type: "string", description: "Optional related Claude session id" },
-						relatedTodoistTaskId: { type: "string", description: "Optional related Todoist task id" },
-					},
-					required: ["text"],
-					additionalProperties: false,
-				},
-				execute: async (_toolCallId: string, params: any) => {
-					const response = await this.sendWhatsAppCommand({
-						command: "send",
-						text: `B-bot: ${params.text}`,
-						contextRef: params.contextRef ?? null,
-						pendingAction: params.expectReply
-							? {
-								kind: params.kind ?? "clarify",
-								promptText: params.text,
-								relatedSessionId: params.relatedSessionId ?? undefined,
-								relatedTodoistTaskId: params.relatedTodoistTaskId ?? undefined,
-							}
-							: undefined,
-					});
-					return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }], details: response };
-				},
-			},
 			{
 				name: "query_blackboard",
 				label: "Query Blackboard",
@@ -556,6 +558,17 @@ export class ControlSurfaceRuntime {
 				images: Array.isArray(payload.images) ? payload.images : undefined,
 			});
 			this.wsHub.send(client.id, { type: "message_queued", itemId: queued.item.id, queueDepth: queued.queueDepth });
+
+			// Mirror web user message to WhatsApp for complete conversation record
+			try {
+				await this.sendWhatsAppCommand({
+					command: "send",
+					text: `*User (web):*\n---\n${payload.text}`,
+					contextRef: null,
+				});
+			} catch (error) {
+				this.log(`mirror web message to WhatsApp failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		}
 	}
 }

@@ -39,3 +39,8 @@ features/
 ### Densify Rule
 
 After creating or substantially editing a research document, run `/densify <file_path>` as a final step before considering it done.
+
+## Protected Files
+
+- `features/overview.md` is source of truth. Do not modify it without explicit user permission.
+- Generally, do not modify feature docs (`features/` directory) unless the user requests it. If a change seems warranted, ask first.

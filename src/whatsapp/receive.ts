@@ -204,10 +204,7 @@ export async function persistInboundMessage(
     return {};
   }
 
-  // Forward to control surface immediately — DB must not gate delivery
-  await forwardInboundToControlSurface({ body, waMessageId, remoteJid });
-
-  // Persist to blackboard as a secondary concern
+  // Filter echoes and duplicates BEFORE forwarding to control surface
   try {
     if (shouldFilterRecentOutboundEcho(db, message)) {
       logger.info(
@@ -217,7 +214,7 @@ export async function persistInboundMessage(
           bodyPreview: previewBody(body),
           windowMs: OUTBOUND_ECHO_WINDOW_MS,
         },
-        "outbound echo — already forwarded, skipping persistence",
+        "outbound echo — skipping forward and persistence",
       );
       return { body };
     }
@@ -227,11 +224,24 @@ export async function persistInboundMessage(
       if (existing?.direction === "inbound") {
         logger.info(
           { rowId: existing.id, waMessageId, remoteJid: existing.remote_jid },
-          "duplicate inbound WhatsApp message — already forwarded, skipping persistence",
+          "duplicate inbound WhatsApp message — skipping forward and persistence",
         );
         return { body, contextRef: existing.context_ref ?? undefined, rowId: existing.id };
       }
     }
+  } catch (error) {
+    logger.error(
+      { err: error, waMessageId, remoteJid, bodyPreview: previewBody(body) },
+      "failed echo/duplicate check — skipping message to be safe",
+    );
+    return { body };
+  }
+
+  // Forward to control surface only after echo/duplicate filtering
+  await forwardInboundToControlSurface({ body, waMessageId, remoteJid });
+
+  // Persist to blackboard as a secondary concern
+  try {
 
     const quotedWaMessageId = extractQuotedWaMessageId(message);
     const contextRef = resolveInboundContextRef(db, { quotedWaMessageId, fallbackChannel: "whatsapp" });

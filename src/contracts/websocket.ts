@@ -90,6 +90,12 @@ export interface TurnEndWebSocketEvent {
   timestamp?: string;
 }
 
+export interface PiSurfacedWebSocketEvent {
+  type: "pi_surfaced";
+  content: string;
+  timestamp?: string;
+}
+
 export type ControlSurfaceWebSocketServerEvent =
   | ConnectedWebSocketEvent
   | QueueItemStartWebSocketEvent
@@ -99,4 +105,5 @@ export type ControlSurfaceWebSocketServerEvent =
   | MessageEndWebSocketEvent
   | ToolExecutionStartWebSocketEvent
   | ToolExecutionEndWebSocketEvent
-  | TurnEndWebSocketEvent;
+  | TurnEndWebSocketEvent
+  | PiSurfacedWebSocketEvent;

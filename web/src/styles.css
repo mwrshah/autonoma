@@ -5,7 +5,7 @@
  */
 
 :root {
-  color-scheme: dark;
+  color-scheme: dark; /* overridden at runtime by useTheme */
 }
 
 * {

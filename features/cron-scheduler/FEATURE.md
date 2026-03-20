@@ -35,15 +35,16 @@ Cron is a deterministic runtime trigger. It does not host Pi and it does not per
 
 Every tick:
 1. read `~/.autonoma/config.json`
-2. inspect blackboard state to classify Claude Code sessions
+2. inspect blackboard state to classify Claude Code sessions; mark `working` sessions as `stale` when their `last_event_at` exceeds `stallMinutes` and no long-running tool is active
 3. if there is no actionable idle/stale condition, exit `0`
-4. call the control surface health endpoint on localhost
-5. if the control surface is not healthy, start it
-6. wait briefly for readiness
-7. inject the appropriate prompt into Pi:
+4. call `GET /status` on the control surface to check Pi state
+5. if Pi is already active, exit `0` (no duplicate prompt)
+6. if the control surface is not healthy, start it via `~/.autonoma/bin/autonoma-up start`
+7. wait for Pi readiness (up to 30 seconds)
+8. inject the appropriate prompt into Pi via `POST /message` (authenticated with `controlSurfaceToken`, retries once on failure):
    - proactive idle-work prompt when all Claude Code sessions are stopped/idle and the machine is in a true idle window
    - stale-session verification prompt when one or more Claude Code sessions look suspect because hook activity stopped advancing
-8. exit `0`
+9. exit `0`
 
 ### Standard Prompt
 
@@ -58,7 +59,7 @@ Cron sends one of two deterministic prompts, depending on what it saw in the bla
 **Stale-session verification prompt** — used when one or more Claude Code sessions look suspect because hook activity stopped advancing:
 
 ```text
-[Cron stale session check] One or more tracked Claude Code sessions look stale based on blackboard timestamps. Verify real tmux state, reconcile SQLite state if needed, and decide whether the session is actually still active, should be marked ended, or should be re-prompted.
+[Cron stale session check] One or more tracked Claude Code sessions are stale based on blackboard state. Verify real tmux state, reconcile SQLite state if needed, and decide whether the session should return to working, stay idle, be ended, or be re-prompted.
 ```
 
 This keeps the cron behavior deterministic while leaving the actual orchestration reasoning to Pi.
@@ -77,7 +78,7 @@ Cron should not generate duplicate prompts just because the scheduler fired.
 
 ### Ownership Boundary
 
-- **Cron owns:** periodic blackboard check, actionable-state classification, launch-if-needed, and deterministic prompt injection
+- **Cron owns:** periodic blackboard check, stale-session marking, actionable-state classification, launch-if-needed, and deterministic prompt injection
 - **Control surface owns:** the embedded Pi session, queueing, health reporting, dependent processes, and runtime supervision
 - **Pi owns:** tmux verification, transcript reading, next-step reasoning, user-facing suggestions, and any permission-gated outreach
 
@@ -86,7 +87,27 @@ Cron should not generate duplicate prompts just because the scheduler fired.
 - **macOS:** launchd user agent
 - **Linux:** `systemd --user` timer
 
-Both schedule the same `~/.autonoma/cron/autonoma-checkin.sh` script.
+Both schedule the same `~/.autonoma/cron/autonoma-checkin.sh` script. A backward-compatible wrapper `~/.autonoma/cron/scheduler.sh` also exists and `exec`s the main script.
+
+### Configuration
+
+The following keys in `~/.autonoma/config.json` affect cron behavior:
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `stallMinutes` | int | `15` | Minutes since last hook event before a `working` session is marked `stale` |
+| `toolTimeoutMinutes` | int | `60` | Minutes since last tool start; sessions with a recent tool start are not marked stale even if `stallMinutes` is exceeded |
+| `controlSurfaceToken` | string | — | Bearer token for `POST /message`. Required; prompt injection is skipped without it |
+| `controlSurfaceHost` | string | `127.0.0.1` | Host for control surface API calls |
+| `controlSurfacePort` | int | `18820` | Port for control surface API calls |
+
+### Stale Detection Logic
+
+A `working` session is marked `stale` when both conditions are met:
+1. `last_event_at` is older than `stallMinutes` (default 15 min)
+2. `last_tool_started_at` is either NULL or older than `toolTimeoutMinutes` (default 60 min)
+
+This prevents marking sessions as stale while a long-running tool (e.g. a build or test suite) is executing.
 
 ## Dependencies
 

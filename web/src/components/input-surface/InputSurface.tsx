@@ -5,6 +5,8 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ClipboardEvent,
+  type DragEvent,
 } from "react";
 import { useControlSurface } from "~/hooks/use-control-surface";
 import type {
@@ -13,6 +15,7 @@ import type {
   ChatTimelineTool,
   ConnectionState,
   DeliveryMode,
+  ImageAttachment,
   MessageSource,
 } from "~/lib/types";
 import { createId, extractToolName, parseUserMessageSource } from "~/lib/utils";
@@ -92,61 +95,8 @@ function timelineToSurfaceEntries(timeline: ChatTimelineItem[]): SurfaceEntry[] 
     if (item.kind === "tool") {
       const tool = item as ChatTimelineTool;
 
-      // Show send_whatsapp as outgoing WhatsApp messages
-      if (tool.tool === "send_whatsapp" && tool.phase === "start") {
-        const args =
-          tool.args && typeof tool.args === "object"
-            ? (tool.args as Record<string, unknown>)
-            : {};
-        const text = String(args.text ?? "");
-        if (text) {
-          entries.push({
-            id: item.id,
-            timestamp: item.createdAt,
-            kind: "outbound",
-            channel: "whatsapp",
-            content: text,
-          });
-        }
-        continue;
-      }
-
-      // Show send_to_user as outgoing to all channels
-      if (tool.tool === "send_to_user" && tool.phase === "start") {
-        const args =
-          tool.args && typeof tool.args === "object"
-            ? (tool.args as Record<string, unknown>)
-            : {};
-        const text = String(args.text ?? args.message ?? "");
-        if (text) {
-          entries.push({
-            id: item.id,
-            timestamp: item.createdAt,
-            kind: "outbound",
-            channel: "all",
-            content: text,
-          });
-        }
-        continue;
-      }
-
-      // Show hook events
-      if (tool.tool === "hook") {
-        const args =
-          tool.args && typeof tool.args === "object"
-            ? (tool.args as Record<string, unknown>)
-            : {};
-        entries.push({
-          id: item.id,
-          timestamp: item.createdAt,
-          kind: "hook",
-          eventName: String(args.event ?? tool.tool),
-          detail: String(args.detail ?? args.text ?? ""),
-        });
-        continue;
-      }
-
-      // Skip other tool calls — they belong in the Pi Agent view
+      // Skip all tool calls — only user messages and pi responses shown
+      // (mirrors WhatsApp: user message in, pi final text response out)
     }
   }
 
@@ -263,6 +213,8 @@ function SurfaceEntryRenderer({ entry }: { entry: SurfaceEntry }) {
 export function InputSurface() {
   const { apiClient, wsClient } = useControlSurface();
   const [draft, setDraft] = useState("");
+  const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [deliveryMode, setDeliveryMode] = useState<DeliveryMode>("followUp");
   const [timeline, setTimeline] = useState<ChatTimelineItem[]>([]);
   const [connectionState, setConnectionState] = useState<ConnectionState>(
@@ -337,14 +289,21 @@ export function InputSurface() {
 
         setStreamingText(null);
         activeAssistantId.current = null;
-        if (content.trim()) {
+        // Don't add assistant message_end to timeline — only pi_surfaced events appear
+        return;
+      }
+
+      if (message.type === "pi_surfaced") {
+        setStreamingText(null);
+        activeAssistantId.current = null;
+        if (message.content.trim()) {
           setTimeline((current) => [
             ...current,
             {
               id: createId("assistant"),
               kind: "message",
               role: "assistant",
-              content,
+              content: message.content,
               createdAt: message.timestamp ?? new Date().toISOString(),
             },
           ]);
@@ -435,13 +394,35 @@ export function InputSurface() {
     el.scrollTop = el.scrollHeight;
   }, [entries, streamingText]);
 
+  function addImageFiles(files: FileList | File[]) {
+    const imageFiles = Array.from(files).filter((f) => f.type.startsWith("image/"));
+    if (!imageFiles.length) return;
+    for (const file of imageFiles) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(",")[1];
+        if (base64) {
+          setPendingImages((prev) => [...prev, { data: base64, mimeType: file.type }]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function removeImage(index: number) {
+    setPendingImages((prev) => prev.filter((_, i) => i !== index));
+  }
+
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     const text = draft.trim();
-    if (!text) return;
+    const images = pendingImages.length ? [...pendingImages] : undefined;
+    if (!text && !images?.length) return;
 
     setIsSending(true);
     setDraft("");
+    setPendingImages([]);
     isAtBottomRef.current = true;
 
     setTimeline((current) => [
@@ -450,20 +431,22 @@ export function InputSurface() {
         id: createId("user"),
         kind: "message",
         role: "user",
-        content: text,
+        content: text || "(image)",
+        images,
         source: "web" as MessageSource,
         createdAt: new Date().toISOString(),
       },
     ]);
-    sentTextsRef.current.add(text);
+    if (text) sentTextsRef.current.add(text);
 
     try {
-      await wsClient.sendMessage(text, deliveryMode);
+      await wsClient.sendMessage(text || "(image)", deliveryMode, images);
     } catch {
       await apiClient.queueMessage({
-        text,
+        text: text || "(image)",
         source: "web",
         deliveryMode,
+        images,
       });
     } finally {
       setIsSending(false);
@@ -471,10 +454,37 @@ export function InputSurface() {
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void handleSubmit(event as unknown as FormEvent);
     }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = event.clipboardData?.items;
+    if (!items) return;
+    const imageFiles: File[] = [];
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length) {
+      event.preventDefault();
+      addImageFiles(imageFiles);
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    if (event.dataTransfer?.files?.length) {
+      addImageFiles(event.dataTransfer.files);
+    }
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
   }
 
   const connectionLabel =
@@ -528,18 +538,65 @@ export function InputSurface() {
       </div>
 
       {/* Input area */}
-      <div className="shrink-0 border-t border-border px-6 py-3">
+      <div className="shrink-0 border-t border-border px-6 py-3" onDrop={handleDrop} onDragOver={handleDragOver}>
         <form onSubmit={handleSubmit} className="space-y-2">
-          <div className="relative">
+          {pendingImages.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {pendingImages.map((img, i) => (
+                <div key={i} className="relative group">
+                  <img
+                    src={`data:${img.mimeType};base64,${img.data}`}
+                    alt="Pending attachment"
+                    className="w-16 h-16 object-cover rounded-lg border border-border"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(i)}
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.length) addImageFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="text-muted-foreground hover:text-foreground transition-colors p-2 mb-1 shrink-0"
+              title="Attach image"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+            </button>
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               rows={2}
               placeholder="Message Pi via Web..."
-              className="w-full rounded-lg border border-border bg-background px-4 py-3 pr-24 text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+              className="flex-1 rounded-lg border border-border bg-background px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
             />
-            <div className="absolute right-2 bottom-2 flex items-center gap-2">
+            <div className="flex flex-col items-center gap-0.5 mb-1 shrink-0">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isSending || (!draft.trim() && !pendingImages.length)}
+              >
+                {isSending ? "..." : "Send"}
+              </Button>
               <select
                 value={deliveryMode}
                 onChange={(e) =>
@@ -550,18 +607,11 @@ export function InputSurface() {
                 <option value="followUp">followUp</option>
                 <option value="steer">steer</option>
               </select>
-              <Button
-                type="submit"
-                size="sm"
-                disabled={isSending || !draft.trim()}
-              >
-                {isSending ? "..." : "Send"}
-              </Button>
             </div>
           </div>
           <p className="text-[10px] text-muted-foreground/50">
             <span className="font-medium text-muted-foreground/70">Web channel</span>
-            {" "}&middot; Ctrl+Enter to send &middot; Messages from WhatsApp, Hooks, and Cron also appear here
+            {" "}&middot; Enter to send, Shift+Enter for newline &middot; Messages from WhatsApp, Hooks, and Cron also appear here
           </p>
         </form>
       </div>

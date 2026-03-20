@@ -32,7 +32,6 @@ import FilePen from "lucide/dist/esm/icons/file-pen.js";
 import FolderOpen from "lucide/dist/esm/icons/folder-open.js";
 import MessageSquare from "lucide/dist/esm/icons/message-square.js";
 import Search from "lucide/dist/esm/icons/search.js";
-import Send from "lucide/dist/esm/icons/send.js";
 import SquareTerminal from "lucide/dist/esm/icons/square-terminal.js";
 import Webhook from "lucide/dist/esm/icons/webhook.js";
 
@@ -538,28 +537,6 @@ function renderLsTool(
   `;
 }
 
-function renderSendWhatsAppTool(
-  params: unknown,
-  result: ToolResultMessageType | undefined,
-): TemplateResult {
-  const p = paramRecord(params);
-  const text = String(p.text ?? "");
-  const output = resultText(result);
-  const succeeded = result && !result.isError;
-
-  return html`
-    <div class="space-y-2">
-      ${renderToolHeader(Send, succeeded ? i18n("Sent to WhatsApp") : i18n("Sending to WhatsApp..."))}
-      ${text
-        ? html`<div class="rounded-lg border border-border px-3 py-2 text-sm source-badge-whatsapp-bg">
-            <markdown-block .content=${text}></markdown-block>
-          </div>`
-        : ""}
-      ${result?.isError ? html`<div class="text-xs text-destructive">${output}</div>` : ""}
-    </div>
-  `;
-}
-
 function renderSendToUserTool(
   params: unknown,
   result: ToolResultMessageType | undefined,
@@ -593,7 +570,6 @@ function renderTool(
   if (name === "read") return renderReadTool(params, result);
   if (name === "grep") return renderGrepTool(params, result);
   if (name === "ls" || name === "glob") return renderLsTool(params, result);
-  if (name === "send_whatsapp") return renderSendWhatsAppTool(params, result);
   if (name === "send_to_user") return renderSendToUserTool(params, result);
   return renderDefaultTool(params, result, isStreaming);
 }
@@ -642,12 +618,6 @@ function summarizeToolCall(
   if (name === "ls" || name === "glob") {
     const path = String(p.path ?? p.pattern ?? p.directory ?? ".");
     return { title: toolName, subtitle: `${state} • ${path}` };
-  }
-
-  if (name === "send_whatsapp") {
-    const text = String(p.text ?? "");
-    const preview = text.length > 60 ? `${text.slice(0, 60)}…` : text;
-    return { title: "WhatsApp", subtitle: preview ? `${state} • ${preview}` : state };
   }
 
   if (name === "send_to_user") {

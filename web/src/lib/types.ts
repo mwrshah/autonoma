@@ -204,4 +204,5 @@ export type WsMessage =
       timestamp?: string;
     }
   | { type: "turn_end" }
+  | { type: "pi_surfaced"; content: string; timestamp?: string }
   | { type: "error"; message: string };
