@@ -185,6 +185,16 @@ export interface RuntimeWhatsAppControlResponse {
 export type RuntimeWhatsAppStartResponse = RuntimeWhatsAppControlResponse;
 export type RuntimeWhatsAppStopResponse = RuntimeWhatsAppControlResponse;
 
+export interface SkillListItem {
+  name: string;
+  description: string;
+  disableModelInvocation: boolean;
+}
+
+export interface SkillsListResponse {
+  items: SkillListItem[];
+}
+
 export interface StopResponse {
   ok: boolean;
   message: string;
@@ -240,6 +250,11 @@ export const CONTROL_SURFACE_ENDPOINTS = {
     method: "POST",
     path: "/runtime/whatsapp/stop",
     auth: "bearer",
+  },
+  skills: {
+    method: "GET",
+    path: "/api/skills",
+    auth: "none",
   },
   stop: {
     method: "POST",

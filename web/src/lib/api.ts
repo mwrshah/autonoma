@@ -4,6 +4,7 @@ import type {
   QueueMessageResponse,
   SessionDetailResponse,
   SessionListResponse,
+  SkillsListResponse,
   StatusResponse,
   TranscriptPage,
 } from "./types";
@@ -82,5 +83,7 @@ export function createAutonomaApiClient(
 
     stopWhatsApp: () =>
       request<{ ok: boolean }>("/runtime/whatsapp/stop", { method: "POST" }),
+
+    listSkills: () => request<SkillsListResponse>("/api/skills"),
   };
 }

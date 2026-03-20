@@ -10,6 +10,7 @@ import { handleMessageRoute } from "./routes/message.ts";
 import { sendJson } from "./routes/_shared.ts";
 import { handleRuntimeWhatsAppRoute } from "./routes/runtime-whatsapp.ts";
 import { handleStatusRoute } from "./routes/status.ts";
+import { handleBrowserSkillsRoute } from "./routes/browser-skills.ts";
 import { handleStopRoute } from "./routes/stop.ts";
 
 const runtime = new ControlSurfaceRuntime();
@@ -89,6 +90,9 @@ async function routeRequest(req: http.IncomingMessage, res: http.ServerResponse)
 	}
 	if (method === CONTROL_SURFACE_ENDPOINTS.piHistory.method && pathname === CONTROL_SURFACE_ENDPOINTS.piHistory.path) {
 		return handleBrowserPiHistoryRoute(runtime, req, res);
+	}
+	if (method === CONTROL_SURFACE_ENDPOINTS.skills.method && pathname === CONTROL_SURFACE_ENDPOINTS.skills.path) {
+		return handleBrowserSkillsRoute(runtime, req, res);
 	}
 	if (method === "GET" && segments[0] === "api" && segments[1] === "sessions" && segments[2] && segments[3] === "transcript") {
 		return handleBrowserTranscriptRoute(runtime, req, res, decodeURIComponent(segments[2]));

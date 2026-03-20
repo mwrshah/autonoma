@@ -183,6 +183,18 @@ export type PiHistoryResponse = {
   items: ChatTimelineItem[];
 };
 
+/* ── Skills ── */
+
+export type SkillListItem = {
+  name: string;
+  description: string;
+  disableModelInvocation: boolean;
+};
+
+export type SkillsListResponse = {
+  items: SkillListItem[];
+};
+
 /* ── WebSocket messages (inbound) ── */
 
 export type WsMessage =

@@ -1,6 +1,7 @@
-import { useRef, type FormEvent, type ClipboardEvent, type DragEvent } from "react";
-import type { DeliveryMode, ImageAttachment } from "~/lib/types";
+import { useRef, useState, useCallback, type FormEvent, type ClipboardEvent, type DragEvent } from "react";
+import type { DeliveryMode, ImageAttachment, SkillListItem } from "~/lib/types";
 import { Button } from "~/components/ui/Button";
+import { SkillPicker } from "~/components/input-surface/SkillPicker";
 
 type MessageInputProps = {
   draft: string;
@@ -12,6 +13,7 @@ type MessageInputProps = {
   pendingImages: ImageAttachment[];
   onAddImages: (files: FileList | File[]) => void;
   onRemoveImage: (index: number) => void;
+  skills?: SkillListItem[];
   placeholder?: string;
   rows?: number;
   helpText?: string;
@@ -27,13 +29,70 @@ export function MessageInput({
   pendingImages,
   onAddImages,
   onRemoveImage,
+  skills,
   placeholder = "Message Pi…",
   rows = 2,
-  helpText = "Enter to send · Shift+Enter for newline",
+  helpText = "Enter to send · Shift+Enter for newline · Type / for skills",
 }: MessageInputProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerFilter, setPickerFilter] = useState("");
+  const [selectedSkill, setSelectedSkill] = useState("");
+
+  const filteredSkills = skills?.filter((s) => {
+    if (!pickerFilter) return true;
+    return s.name.toLowerCase().includes(pickerFilter.toLowerCase());
+  }) ?? [];
+
+  const handleDraftChange = useCallback((value: string) => {
+    onDraftChange(value);
+    const match = value.match(/^\/(\S*)$/);
+    if (match && skills?.length) {
+      setPickerOpen(true);
+      setPickerFilter(match[1]);
+      setSelectedSkill("");
+    } else {
+      setPickerOpen(false);
+    }
+  }, [onDraftChange, skills]);
+
+  function handleSkillSelect(name: string) {
+    onDraftChange(`/${name} `);
+    setPickerOpen(false);
+  }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (pickerOpen) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPickerOpen(false);
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (selectedSkill) {
+          handleSkillSelect(selectedSkill);
+        } else if (filteredSkills.length > 0) {
+          handleSkillSelect(filteredSkills[0].name);
+        }
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const currentIndex = filteredSkills.findIndex((s) => s.name === selectedSkill);
+        let nextIndex: number;
+        if (event.key === "ArrowDown") {
+          nextIndex = currentIndex < filteredSkills.length - 1 ? currentIndex + 1 : 0;
+        } else {
+          nextIndex = currentIndex > 0 ? currentIndex - 1 : filteredSkills.length - 1;
+        }
+        if (filteredSkills[nextIndex]) {
+          setSelectedSkill(filteredSkills[nextIndex].name);
+        }
+        return;
+      }
+    }
+
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       onSubmit(event as unknown as FormEvent);
@@ -108,9 +167,18 @@ export function MessageInput({
           }}
         />
         <div className="relative rounded-lg border border-border bg-background focus-within:ring-2 focus-within:ring-ring focus-within:border-transparent">
+          <SkillPicker
+            open={pickerOpen}
+            filter={pickerFilter}
+            skills={skills ?? []}
+            selectedValue={selectedSkill}
+            onSelectedValueChange={setSelectedSkill}
+            onSelect={handleSkillSelect}
+            onClose={() => setPickerOpen(false)}
+          />
           <textarea
             value={draft}
-            onChange={(e) => onDraftChange(e.target.value)}
+            onChange={(e) => handleDraftChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             rows={rows}

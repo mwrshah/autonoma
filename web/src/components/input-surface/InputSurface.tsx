@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useControlSurface } from "~/hooks/use-control-surface";
 import type {
   ChatTimelineItem,
@@ -214,6 +215,12 @@ export function InputSurface() {
     wsClient.connectionState,
   );
   const [isSending, setIsSending] = useState(false);
+  const { data: skillsData } = useQuery({
+    queryKey: ["skills"],
+    queryFn: () => apiClient.listSkills(),
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
   const sentTextsRef = useRef<Set<string>>(new Set());
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
@@ -434,6 +441,7 @@ export function InputSurface() {
         pendingImages={pendingImages}
         onAddImages={addImageFiles}
         onRemoveImage={removeImage}
+        skills={skillsData?.items}
         placeholder="Message Pi via Web…"
       />
     </div>
