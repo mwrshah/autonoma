@@ -127,6 +127,40 @@ function parseMessageRecord(messageRecord: Record<string, unknown>, createdAt: s
   }
 }
 
+/**
+ * Keep only the last assistant message per turn (before each user message or end of list).
+ * This mirrors the live path where only `pi_surfaced` (the final assistant text) is shown.
+ */
+function keepOnlySurfacedAssistant(items: PiHistoryItem[]): PiHistoryItem[] {
+  const result: PiHistoryItem[] = [];
+  let lastAssistantIdx = -1;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const isAssistantMsg = item.kind === "message" && item.role === "assistant";
+    const isUserMsg = item.kind === "message" && item.role === "user";
+
+    if (isAssistantMsg) {
+      lastAssistantIdx = i;
+      continue; // defer — only emit the last one per turn
+    }
+
+    if (isUserMsg && lastAssistantIdx >= 0) {
+      result.push(items[lastAssistantIdx]);
+      lastAssistantIdx = -1;
+    }
+
+    result.push(item);
+  }
+
+  // Flush trailing assistant message (last turn with no following user message)
+  if (lastAssistantIdx >= 0) {
+    result.push(items[lastAssistantIdx]);
+  }
+
+  return result;
+}
+
 function parseHistoryLine(line: string, lineNumber: number, items: PiHistoryItem[]): void {
   const parsed = JSON.parse(line) as Record<string, unknown>;
   if (parsed.type !== "message") return;
@@ -154,7 +188,7 @@ export function readPiHistoryFromMessages(
   return {
     sessionId,
     sessionFile,
-    items,
+    items: keepOnlySurfacedAssistant(items),
   };
 }
 
@@ -191,6 +225,6 @@ export async function readPiHistory(sessionId: string, sessionFile: string): Pro
   return {
     sessionId,
     sessionFile,
-    items,
+    items: keepOnlySurfacedAssistant(items),
   };
 }
