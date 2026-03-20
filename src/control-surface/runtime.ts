@@ -549,10 +549,35 @@ export class ControlSurfaceRuntime {
 		if (!data || typeof data !== "object") return;
 		const payload = data as ControlSurfaceWebSocketClientEvent;
 		if (payload.type === "message" && typeof payload.text === "string") {
+			// Route through classifier
+			let routerPrefix = "";
+			let routerMeta: Record<string, unknown> = {};
+			if (this.config.geminiApiKey) {
+				try {
+					const { classifyMessage } = await import("./router/classify.ts");
+					const result = await classifyMessage(payload.text, this.blackboard, this.config.geminiApiKey, this.config.projectsDir);
+					routerMeta = { router_action: result.action, router_is_work: result.isWorkMessage };
+					if (result.workstream) {
+						routerMeta.workstream_id = result.workstream.id;
+						routerMeta.workstream_name = result.workstream.name;
+						const parts = [
+							`[Workstream: "${result.workstream.name}" (${result.workstream.id.slice(0, 8)})]`,
+							result.action === "created" ? " [NEW]" : "",
+							result.workstream.repo_path ? ` [repo: ${result.workstream.repo_path}]` : "",
+							result.workstream.worktree_path ? ` [worktree: ${result.workstream.worktree_path}]` : "",
+							"\n",
+						];
+						routerPrefix = parts.join("");
+					}
+				} catch (error) {
+					this.log(`router classification failed: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
+
 			const queued = this.enqueue({
-				text: `[Web] User: \"${payload.text}\"`,
+				text: `${routerPrefix}[Web] User: \"${payload.text}\"`,
 				source: "web",
-				metadata: { via: "ws" },
+				metadata: { via: "ws", ...routerMeta },
 				webClientId: client.id,
 				deliveryMode: payload.deliveryMode === "steer" ? "steer" : "followUp",
 				images: Array.isArray(payload.images) ? payload.images : undefined,
