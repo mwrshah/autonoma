@@ -258,6 +258,36 @@ function applyV5Migration(db: DatabaseSync): void {
   }
 }
 
+function applyV6Migration(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE;");
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          source TEXT NOT NULL CHECK (source IN ('whatsapp', 'web', 'hook', 'cron', 'pi_outbound')),
+          direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+          content TEXT NOT NULL,
+          sender TEXT,
+          workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
+          metadata TEXT,
+          created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_messages_source_created ON messages(source, created_at);
+      CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+      CREATE INDEX IF NOT EXISTS idx_messages_workstream ON messages(workstream_id);
+
+      INSERT OR IGNORE INTO schema_migrations(version) VALUES (6);
+    `);
+
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
+
 export function migrateBlackboard(db: DatabaseSync): number {
   ensureSchemaTables(db);
 
@@ -279,6 +309,11 @@ export function migrateBlackboard(db: DatabaseSync): number {
 
   if (version < 5) {
     applyV5Migration(db);
+    version = getSchemaVersion(db);
+  }
+
+  if (version < 6) {
+    applyV6Migration(db);
   }
 
   return getSchemaVersion(db);

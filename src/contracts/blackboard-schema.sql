@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS whatsapp_messages (
     processed_at DATETIME
 );
 
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL CHECK (source IN ('whatsapp', 'web', 'hook', 'cron', 'pi_outbound')),
+    direction TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+    content TEXT NOT NULL,
+    sender TEXT,
+    workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
+    metadata TEXT,
+    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS pending_actions (
     action_id TEXT PRIMARY KEY,
     channel TEXT NOT NULL,
@@ -102,3 +113,6 @@ CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, stat
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);
 CREATE INDEX IF NOT EXISTS idx_whatsapp_status_created ON whatsapp_messages(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_pending_actions_status_created ON pending_actions(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_source_created ON messages(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_workstream ON messages(workstream_id);

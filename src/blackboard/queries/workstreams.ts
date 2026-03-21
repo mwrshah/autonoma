@@ -26,6 +26,12 @@ export function insertWorkstream(db: BlackboardDatabase, name: string): Workstre
 	return getWorkstreamById(db, id)!;
 }
 
+export function enrichWorkstream(db: BlackboardDatabase, workstreamId: string, repoPath: string, worktreePath?: string): void {
+	db.prepare(
+		`UPDATE workstreams SET repo_path = ?, worktree_path = ? WHERE id = ?`,
+	).run(repoPath, worktreePath ?? null, workstreamId);
+}
+
 export function closeWorkstream(db: BlackboardDatabase, workstreamId: string): void {
 	db.prepare(
 		`UPDATE workstreams
