@@ -3,6 +3,7 @@ import type { BlackboardDatabase } from "../../blackboard/db.ts";
 import type { WorkstreamRow } from "../../contracts/index.ts";
 import { listOpenWorkstreams, listRecentlyClosedWorkstreams, insertWorkstream, reopenWorkstream } from "../../blackboard/queries/workstreams.ts";
 import { callGeminiClassify, type GeminiClassifyResult } from "./gemini-client.ts";
+import { getRecentConversationByWorkstream, type ConversationSnippet } from "../../blackboard/queries/messages.ts";
 
 export type ClassificationResult = {
 	workstream: WorkstreamRow | null;
@@ -27,16 +28,58 @@ function formatWorkstreamLine(ws: WorkstreamRow, label?: string): string {
 	return `- id: "${ws.id}", name: "${ws.name}"${suffix}${ws.repo_path ? `, repo: ${ws.repo_path}` : ""}`;
 }
 
+function relativeTime(iso: string): string {
+	const diffMs = Date.now() - new Date(iso).getTime();
+	if (diffMs < 0) return "just now";
+	const mins = Math.floor(diffMs / 60_000);
+	if (mins < 1) return "just now";
+	if (mins < 60) return `${mins}m ago`;
+	const hours = Math.floor(mins / 60);
+	if (hours < 24) return `${hours}h ago`;
+	const days = Math.floor(hours / 24);
+	return days === 1 ? "yesterday" : `${days}d ago`;
+}
+
+function truncate(text: string, maxLen: number): string {
+	const oneLine = text.replace(/\n/g, " ").trim();
+	return oneLine.length <= maxLen ? oneLine : oneLine.slice(0, maxLen - 1) + "…";
+}
+
+function buildConversationBlock(
+	workstreams: WorkstreamRow[],
+	recentConversation: Map<string, ConversationSnippet[]>,
+): string {
+	// Cap at 5 most recently active workstreams
+	const withConversation = workstreams
+		.filter((ws) => recentConversation.has(ws.id))
+		.slice(0, 5);
+
+	if (withConversation.length === 0) return "";
+
+	const sections = withConversation.map((ws) => {
+		const snippets = recentConversation.get(ws.id)!;
+		const lines = snippets.map(
+			(s) => `- [${s.source}] "${truncate(s.content, 100)}" (${relativeTime(s.created_at)})`,
+		);
+		return `### ${ws.name} (${ws.id.slice(0, 8)})\n${lines.join("\n")}`;
+	});
+
+	return `\n## Recent conversation per workstream\n${sections.join("\n\n")}\n`;
+}
+
 function buildClassificationPrompt(
 	message: string,
 	workstreams: WorkstreamRow[],
 	recentlyClosed: WorkstreamRow[],
+	recentConversation: Map<string, ConversationSnippet[]>,
 	projects: string[],
 ): string {
 	const workstreamBlock =
 		workstreams.length > 0
 			? workstreams.map((ws) => formatWorkstreamLine(ws)).join("\n")
 			: "(none open)";
+
+	const conversationBlock = buildConversationBlock(workstreams, recentConversation);
 
 	const closedBlock =
 		recentlyClosed.length > 0
@@ -51,7 +94,7 @@ Given a user message, classify it against open workstreams and known projects.
 
 ## Open workstreams
 ${workstreamBlock}
-
+${conversationBlock}
 ## Recently closed workstreams (last 6 hours)
 ${closedBlock}
 
@@ -65,6 +108,7 @@ ${projectBlock}
 4. When in doubt between matching an existing workstream and creating a new one, prefer matching the existing one.
 5. A message that references a known project by name should be matched to an existing workstream for that project if one exists, or trigger a new workstream if not.
 6. If the message relates to a recently closed workstream, return its id. Do not create a duplicate workstream for recently completed work.
+7. Use the recent conversation snippets to understand context when deciding if the message relates to an existing workstream.
 
 ## User message
 ${message}`;
@@ -78,8 +122,9 @@ export async function classifyMessage(
 ): Promise<ClassificationResult> {
 	const workstreams = listOpenWorkstreams(db);
 	const recentlyClosed = listRecentlyClosedWorkstreams(db, 6);
+	const recentConversation = getRecentConversationByWorkstream(db, 12, 3);
 	const projects = listProjectDirs(projectsDir);
-	const prompt = buildClassificationPrompt(message, workstreams, recentlyClosed, projects);
+	const prompt = buildClassificationPrompt(message, workstreams, recentlyClosed, recentConversation, projects);
 
 	let result: GeminiClassifyResult;
 	try {

@@ -62,3 +62,38 @@ export function getMessagesByWorkstream(db: BlackboardDatabase, workstreamId: st
     "SELECT * FROM messages WHERE workstream_id = ? ORDER BY created_at ASC LIMIT ?",
   ).all(workstreamId, limit) as unknown as MessageRow[];
 }
+
+export type ConversationSnippet = {
+  workstream_id: string;
+  workstream_name: string;
+  content: string;
+  source: string;
+  created_at: string;
+};
+
+export function getRecentConversationByWorkstream(
+  db: BlackboardDatabase,
+  withinHours: number,
+  maxPerWorkstream: number,
+): Map<string, ConversationSnippet[]> {
+  const rows = db.prepare(
+    `SELECT m.workstream_id, w.name AS workstream_name,
+            m.content, m.source, m.created_at
+     FROM messages m
+     JOIN workstreams w ON w.id = m.workstream_id AND w.status = 'open'
+     WHERE m.created_at >= datetime('now', '-' || ? || ' hours')
+       AND m.direction = 'inbound'
+       AND m.sender = 'user'
+     ORDER BY m.workstream_id, m.created_at DESC`,
+  ).all(withinHours) as unknown as ConversationSnippet[];
+
+  const grouped = new Map<string, ConversationSnippet[]>();
+  for (const row of rows) {
+    const list = grouped.get(row.workstream_id) ?? [];
+    if (list.length < maxPerWorkstream) {
+      list.push(row);
+    }
+    grouped.set(row.workstream_id, list);
+  }
+  return grouped;
+}
