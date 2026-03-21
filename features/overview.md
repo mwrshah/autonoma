@@ -37,7 +37,7 @@ Pi is reactive in v1 — triggered by human messages and Claude Code hook events
 │  │           Embedded Pi Agent (SDK)            │        │
 │  │  Persistent session · auto-compacting        │        │
 │  │  Serialized turn queue                       │        │
-│  │  Tools: query_blackboard,      │        │
+│  │  Tools: query_blackboard, close_workstream,  │        │
 │  │         reload_resources, read, bash, grep   │        │
 │  │  Skills: Todoist, tmux-2, Autonoma workflows │        │
 │  └──────────────────────────────────────────────┘        │
@@ -92,19 +92,19 @@ Notes:
 
 - **inactive** — no active Pi runtime row currently exists
 - **`active`** — Pi runtime exists and is processing a turn
-- **`idle`** — Pi runtime is alive but not processing a turn; no pending work
-- **`waiting_for_user`** — Pi has surfaced a question or update and is waiting for the user to respond
-- **`waiting_for_sessions`** — Pi is waiting for downstream Claude Code sessions to complete
+- **`waiting_for_user`** — universal idle state. Covers: startup, between tasks, after finishing work, ball in user's court. Any time Pi isn't active and isn't waiting for sessions, it's waiting for the user.
+- **`waiting_for_sessions`** — Pi is waiting for one or more managed Claude Code sessions to complete. When the last managed session stops, Pi transitions to `active` (processes the hook), then to `waiting_for_user`.
 - **`ended`** — Pi runtime was intentionally closed
 - **`crashed`** — Pi runtime was reconciled as abnormally terminated
 
 Notes:
+- All state transitions are runtime-managed — Pi never sets its own state
 - `waiting_for_user` and `waiting_for_sessions` are tracked for observability in v1; cron will act on them post-v1
 - Pi `crashed` is worth persisting because repeated abnormal exits are operationally useful to debug
 
 ### Workstream states
 
-Workstreams are ephemeral. An open workstream has a row in the `workstreams` table. When Pi completes a workstream, it deletes the row and cleans up the git worktree. Absence from the table means done — there is no persisted `closed` state.
+Workstreams are soft-deleted, not hard-deleted. Each workstream has a `status` field (`open` or `closed`) and a `closed_at` timestamp. When Pi completes a workstream (via the orchestrator's `close_workstream` tool), the row is set to `closed` and the git worktree is removed. The router sees recently closed workstreams (last 6 hours) to prevent duplicate creation and allow reopening.
 
 ## Design Principles
 
@@ -125,14 +125,15 @@ Workstreams are ephemeral. An open workstream has a row in the `workstreams` tab
 
 ## Future Direction
 
-The v1 single-Pi architecture is designed to evolve toward the full vision:
+The v1 single-Pi architecture is designed to evolve toward the full vision. The Pi lifecycle spec is now written and being implemented — the foundations for multi-Pi are actively being built:
 
+- **Pi lifecycle (in progress)**: Pi→session linkage (`pi_session_id` FK on sessions), runtime-managed state machine (active/waiting_for_sessions/waiting_for_user/ended/crashed), orchestrator self-close via human-gated `close_workstream` tool.
 - **Multi-Pi orchestration**: each workstream gets its own Pi agent (orchestrator), with a default agent handling non-workstream requests and Todoist-driven work discovery.
 - **Router spawns orchestrators**: instead of just classifying, the router creates new orchestrator Pi instances with one-time context transfer.
 - **Cron-driven proactivity**: Pi agents wake on cron to check Todoist, monitor sessions, and surface options to the user.
 - **Skill Recursion Engine**: automated audit of Claude Code sessions for skill improvement proposals.
 
-The v1 workstreams table, session-to-workstream binding, and router classification lay the schema and behavioral foundation for this evolution.
+The v1 workstreams table, session-to-workstream binding, router classification, and Pi lifecycle machinery lay the schema and behavioral foundation for this evolution.
 
 ## Quick Start
 

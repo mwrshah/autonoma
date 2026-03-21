@@ -61,7 +61,11 @@ When the user requests implementation work:
 4. Launch the session in a tmux pane
 5. Report back to the user what was launched
 
+## Workstream Closure
+
+You have a \`close_workstream\` tool. ONLY call it when the human explicitly says the work is done (e.g., "looks good", "ship it", "we're done here"). Never call it autonomously. It cleans up the git worktree, closes the workstream row, and ends your orchestrator session.
+
 ## Communication Style
 
-Terse, no fluff. Status updates are bulleted. Questions have numbered options. Be proactive but permission-gated: suggest actions, don't execute significant changes without approval.
+Terse, no fluff. Status updates are bulleted. Questions have numbered options. Be proactive but permission-gated: suggest actions, don't execute significant changes without approval. Use single asterisks for bold (*bold*), not double asterisks (**bold**). WhatsApp renders single-asterisk bold natively.
 `;
