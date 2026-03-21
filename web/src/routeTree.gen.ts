@@ -15,6 +15,7 @@ import { Route as SessionsRouteRouteImport } from './routes/sessions.route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SessionsIndexRouteImport } from './routes/sessions.index'
 import { Route as SessionsSessionIdRouteImport } from './routes/sessions.$sessionId'
+import { Route as SessionsWorkstreamWorkstreamIdRouteImport } from './routes/sessions.workstream.$workstreamId'
 
 const RuntimeRoute = RuntimeRouteImport.update({
   id: '/runtime',
@@ -46,6 +47,12 @@ const SessionsSessionIdRoute = SessionsSessionIdRouteImport.update({
   path: '/$sessionId',
   getParentRoute: () => SessionsRouteRoute,
 } as any)
+const SessionsWorkstreamWorkstreamIdRoute =
+  SessionsWorkstreamWorkstreamIdRouteImport.update({
+    id: '/workstream/$workstreamId',
+    path: '/workstream/$workstreamId',
+    getParentRoute: () => SessionsRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +61,7 @@ export interface FileRoutesByFullPath {
   '/runtime': typeof RuntimeRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/sessions/workstream/$workstreamId': typeof SessionsWorkstreamWorkstreamIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -61,6 +69,7 @@ export interface FileRoutesByTo {
   '/runtime': typeof RuntimeRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/sessions': typeof SessionsIndexRoute
+  '/sessions/workstream/$workstreamId': typeof SessionsWorkstreamWorkstreamIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -70,6 +79,7 @@ export interface FileRoutesById {
   '/runtime': typeof RuntimeRoute
   '/sessions/$sessionId': typeof SessionsSessionIdRoute
   '/sessions/': typeof SessionsIndexRoute
+  '/sessions/workstream/$workstreamId': typeof SessionsWorkstreamWorkstreamIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -80,8 +90,15 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sessions/$sessionId'
     | '/sessions/'
+    | '/sessions/workstream/$workstreamId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/pi' | '/runtime' | '/sessions/$sessionId' | '/sessions'
+  to:
+    | '/'
+    | '/pi'
+    | '/runtime'
+    | '/sessions/$sessionId'
+    | '/sessions'
+    | '/sessions/workstream/$workstreamId'
   id:
     | '__root__'
     | '/'
@@ -90,6 +107,7 @@ export interface FileRouteTypes {
     | '/runtime'
     | '/sessions/$sessionId'
     | '/sessions/'
+    | '/sessions/workstream/$workstreamId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -143,17 +161,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SessionsSessionIdRouteImport
       parentRoute: typeof SessionsRouteRoute
     }
+    '/sessions/workstream/$workstreamId': {
+      id: '/sessions/workstream/$workstreamId'
+      path: '/workstream/$workstreamId'
+      fullPath: '/sessions/workstream/$workstreamId'
+      preLoaderRoute: typeof SessionsWorkstreamWorkstreamIdRouteImport
+      parentRoute: typeof SessionsRouteRoute
+    }
   }
 }
 
 interface SessionsRouteRouteChildren {
   SessionsSessionIdRoute: typeof SessionsSessionIdRoute
   SessionsIndexRoute: typeof SessionsIndexRoute
+  SessionsWorkstreamWorkstreamIdRoute: typeof SessionsWorkstreamWorkstreamIdRoute
 }
 
 const SessionsRouteRouteChildren: SessionsRouteRouteChildren = {
   SessionsSessionIdRoute: SessionsSessionIdRoute,
   SessionsIndexRoute: SessionsIndexRoute,
+  SessionsWorkstreamWorkstreamIdRoute: SessionsWorkstreamWorkstreamIdRoute,
 }
 
 const SessionsRouteRouteWithChildren = SessionsRouteRoute._addFileChildren(
