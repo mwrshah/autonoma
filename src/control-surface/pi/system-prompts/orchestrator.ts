@@ -50,7 +50,9 @@ ${IMPLEMENTATION_PROCEDURE}
 
 ## Worktree Setup
 
-When starting work on a workstream that involves code changes, use \`create_worktree\` to set up an isolated git worktree before launching CC sessions. This creates a branch from origin/main and records the paths on the workstream.
+When your workstream involves code changes, create a worktree in the relevant repository before launching CC sessions. Use \`create_worktree\` with the repo path — it auto-generates a numbered branch (NNN-<workstream-slug>) and creates an isolated worktree. Typically one worktree per workstream. If work spans multiple repos, create one per repo. All CC sessions for a given repo share the same worktree.
+
+The tool uses \`git gtr\` if available, falling back to raw git commands. Branches follow the NNN-description convention (e.g., 024-fix-auth-bug). The worktree path and branch name are recorded on the workstream automatically.
 
 ## Workstream Closure
 

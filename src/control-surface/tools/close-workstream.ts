@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import type { BlackboardDatabase } from "../../blackboard/db.ts";
 import { getWorkstreamById, closeWorkstream } from "../../blackboard/queries/workstreams.ts";
 import { endPiSession } from "../../blackboard/queries/pi-sessions.ts";
@@ -10,6 +11,50 @@ type CloseWorkstreamResult = {
   message: string;
   worktreeRemoved?: boolean;
 };
+
+function hasGtr(cwd: string): boolean {
+  try {
+    execSync("git gtr version", { cwd, timeout: 5_000, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function inferBranchFromWorktree(worktreePath: string): string | null {
+  try {
+    const output = execSync("git branch --show-current", { cwd: worktreePath, timeout: 5_000, stdio: "pipe" })
+      .toString()
+      .trim();
+    return output || null;
+  } catch {
+    return null;
+  }
+}
+
+function removeWithGtr(repoPath: string, branch: string): boolean {
+  try {
+    // --yes to skip confirmation, no --delete-branch to preserve the branch for PR/review
+    execSync(`git gtr rm ${branch} --yes`, { cwd: repoPath, timeout: 15_000, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeWithRawGit(worktreePath: string): boolean {
+  try {
+    execSync(`git worktree remove ${JSON.stringify(worktreePath)}`, { timeout: 15_000, stdio: "pipe" });
+    return true;
+  } catch {
+    try {
+      execSync(`git worktree remove --force ${JSON.stringify(worktreePath)}`, { timeout: 15_000, stdio: "pipe" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
 
 export function executeCloseWorkstream(
   blackboard: BlackboardDatabase,
@@ -26,23 +71,14 @@ export function executeCloseWorkstream(
 
   let worktreeRemoved = false;
   if (workstream.worktree_path && fs.existsSync(workstream.worktree_path)) {
-    try {
-      execSync(`git worktree remove ${JSON.stringify(workstream.worktree_path)}`, {
-        timeout: 15_000,
-        stdio: "pipe",
-      });
-      worktreeRemoved = true;
-    } catch (error) {
-      // Force remove if normal remove fails (e.g., dirty worktree)
-      try {
-        execSync(`git worktree remove --force ${JSON.stringify(workstream.worktree_path)}`, {
-          timeout: 15_000,
-          stdio: "pipe",
-        });
-        worktreeRemoved = true;
-      } catch {
-        // Log but don't block — workstream close is more important than worktree cleanup
-      }
+    const branch = inferBranchFromWorktree(workstream.worktree_path);
+    const repoPath = workstream.repo_path || path.resolve(workstream.worktree_path, "..");
+
+    if (branch && hasGtr(repoPath)) {
+      worktreeRemoved = removeWithGtr(repoPath, branch);
+    }
+    if (!worktreeRemoved) {
+      worktreeRemoved = removeWithRawGit(workstream.worktree_path);
     }
   }
 
@@ -52,7 +88,7 @@ export function executeCloseWorkstream(
   return {
     ok: true,
     workstreamId,
-    message: `Workstream "${workstream.name}" closed.${worktreeRemoved ? " Git worktree removed." : ""}`,
+    message: `Workstream "${workstream.name}" closed.${worktreeRemoved ? " Worktree removed (branch preserved)." : ""}`,
     worktreeRemoved,
   };
 }
@@ -62,7 +98,7 @@ export function createCloseWorkstreamTool(blackboard: BlackboardDatabase, piSess
     name: "close_workstream",
     label: "Close Workstream",
     description:
-      "Close the current workstream. Only call when the human explicitly confirms the work is done. Cleans up the git worktree, closes the workstream, and ends this orchestrator session.",
+      "Close the current workstream. Only call when the human explicitly confirms the work is done. Removes the git worktree (preserves the branch for PR/review), closes the workstream, and ends this orchestrator session.",
     parameters: {
       type: "object",
       properties: {
