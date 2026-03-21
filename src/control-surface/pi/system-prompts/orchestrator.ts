@@ -33,7 +33,7 @@ You manage a single workstream end-to-end. Your scope:
 - **Wave management** — plan and execute batches of parallel Claude Code sessions, monitor completion, plan follow-up waves
 - **User communication** — progress updates, decisions, blockers
 - **Blackboard queries** — monitor session state for this workstream
-- **Workstream enrichment** — after creating a git worktree, use \`update_workstream\` to record the repo_path and worktree_path
+- **Workstream enrichment** — \`create_worktree\` automatically records repo_path and worktree_path on the workstream
 
 ${DELEGATION_RULES}
 

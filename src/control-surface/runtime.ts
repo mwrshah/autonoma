@@ -19,7 +19,6 @@ import type {
 import { openBlackboard, pingBlackboard, type BlackboardDatabase } from "../blackboard/db.ts";
 import { executeCloseWorkstream } from "./tools/close-workstream.ts";
 import { executeCreateWorktree } from "./tools/create-worktree.ts";
-import { enrichWorkstream, getWorkstreamById } from "../blackboard/queries/workstreams.ts";
 import {
 	endPiSession,
 	reconcilePreviousPiSessions,
@@ -117,7 +116,7 @@ export class ControlSurfaceRuntime {
 
 		const created = await createAutonomaAgent({
 			config: this.config,
-			customTools: this.createCustomTools(),
+			customTools: this.createCustomTools("orchestrator"),
 		});
 		this.piSession = created.session;
 		this.piModelInfo = created.modelInfo;
@@ -459,8 +458,8 @@ export class ControlSurfaceRuntime {
 		return undefined;
 	}
 
-	private createCustomTools(): Array<any> {
-		return [
+	private createCustomTools(role: "orchestrator" | "default" = "default"): Array<any> {
+		const tools: Array<any> = [
 			{
 				name: "query_blackboard",
 				label: "Query Blackboard",
@@ -499,33 +498,6 @@ export class ControlSurfaceRuntime {
 				},
 			},
 			{
-				name: "update_workstream",
-				label: "Update Workstream",
-				description:
-					"Update a workstream's repo_path and worktree_path. Call after creating a git worktree for a workstream.",
-				parameters: {
-					type: "object",
-					properties: {
-						workstream_id: { type: "string", description: "ID of the workstream to update" },
-						repo_path: { type: "string", description: "Absolute path to the repository" },
-						worktree_path: { type: "string", description: "Absolute path to the git worktree (if different from repo_path)" },
-					},
-					required: ["workstream_id", "repo_path"],
-					additionalProperties: false,
-				},
-				execute: async (_toolCallId: string, params: any) => {
-					const ws = getWorkstreamById(this.blackboard, params.workstream_id);
-					if (!ws) {
-						return { content: [{ type: "text", text: `Workstream ${params.workstream_id} not found` }], details: { ok: false } };
-					}
-					enrichWorkstream(this.blackboard, params.workstream_id, params.repo_path, params.worktree_path);
-					return {
-						content: [{ type: "text", text: `Workstream "${ws.name}" updated: repo=${params.repo_path}${params.worktree_path ? `, worktree=${params.worktree_path}` : ""}` }],
-						details: { ok: true, workstreamId: params.workstream_id },
-					};
-				},
-			},
-			{
 				name: "create_worktree",
 				label: "Create Git Worktree",
 				description:
@@ -545,7 +517,10 @@ export class ControlSurfaceRuntime {
 					return { content: [{ type: "text", text: result.message }], details: result };
 				},
 			},
-			{
+		];
+
+		if (role === "orchestrator") {
+			tools.push({
 				name: "close_workstream",
 				label: "Close Workstream",
 				description:
@@ -565,8 +540,10 @@ export class ControlSurfaceRuntime {
 					const result = executeCloseWorkstream(this.blackboard, this.piSession.sessionId, params.workstream_id);
 					return { content: [{ type: "text", text: result.message }], details: result };
 				},
-			},
-		];
+			});
+		}
+
+		return tools;
 	}
 
 	private queryBlackboard(sql: string): Array<Record<string, unknown>> {
