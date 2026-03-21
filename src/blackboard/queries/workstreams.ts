@@ -34,6 +34,13 @@ export function closeWorkstream(db: BlackboardDatabase, workstreamId: string): v
 	).run(workstreamId);
 }
 
+export function reopenWorkstream(db: BlackboardDatabase, workstreamId: string): WorkstreamRow | null {
+	db.prepare(
+		`UPDATE workstreams SET status = 'open', closed_at = NULL WHERE id = ?`,
+	).run(workstreamId);
+	return getWorkstreamById(db, workstreamId);
+}
+
 export function listRecentlyClosedWorkstreams(db: BlackboardDatabase, withinHours: number): WorkstreamRow[] {
 	return db
 		.prepare(
