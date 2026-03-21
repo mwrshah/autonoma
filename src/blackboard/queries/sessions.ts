@@ -17,6 +17,8 @@ export interface SessionStartPayload {
   tmux_session?: string;
   task_description?: string;
   todoist_task_id?: string;
+  pi_session_id?: string;
+  workstream_id?: string;
 }
 
 function textOrNull(value: unknown): string | null {
@@ -71,6 +73,8 @@ function mapSessionRow(row: ClaudeSessionRow): SessionListItem {
     todoistTaskId: row.todoist_task_id,
     agentManaged: Boolean(row.agent_managed),
     sessionEndReason: row.session_end_reason,
+    workstreamId: row.workstream_id,
+    piSessionId: row.pi_session_id,
     startedAt: row.started_at,
     endedAt: row.ended_at,
     lastEventAt: row.last_event_at,
@@ -242,8 +246,9 @@ export function insertSession(db: BlackboardDatabase, payload: SessionStartPaylo
     `INSERT INTO sessions (
        session_id, launch_id, tmux_session, cwd, project, project_label,
        model, permission_mode, source, status, transcript_path,
-       task_description, todoist_task_id, agent_managed, started_at, last_event_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?)
+       task_description, todoist_task_id, agent_managed,
+       pi_session_id, workstream_id, started_at, last_event_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(session_id) DO UPDATE SET
        launch_id = COALESCE(excluded.launch_id, sessions.launch_id),
        tmux_session = COALESCE(excluded.tmux_session, sessions.tmux_session),
@@ -261,6 +266,8 @@ export function insertSession(db: BlackboardDatabase, payload: SessionStartPaylo
          WHEN excluded.agent_managed IS NOT NULL THEN excluded.agent_managed
          ELSE sessions.agent_managed
        END,
+       pi_session_id = COALESCE(excluded.pi_session_id, sessions.pi_session_id),
+       workstream_id = COALESCE(excluded.workstream_id, sessions.workstream_id),
        started_at = MIN(sessions.started_at, excluded.started_at),
        last_event_at = MAX(sessions.last_event_at, excluded.last_event_at)`,
   ).run(
@@ -277,6 +284,8 @@ export function insertSession(db: BlackboardDatabase, payload: SessionStartPaylo
     textOrNull(payload.task_description),
     textOrNull(payload.todoist_task_id),
     payload.agent_managed ? 1 : 0,
+    textOrNull(payload.pi_session_id),
+    textOrNull(payload.workstream_id),
     ts,
     ts,
   );
@@ -294,5 +303,32 @@ export function updateSessionStop(db: BlackboardDatabase, sessionId: string): vo
          END
      WHERE session_id = ?`,
   ).run(ts, ts, sessionId);
+}
+
+export function getActiveManagedSessionsByPi(db: BlackboardDatabase, piSessionId: string): SessionListItem[] {
+  const rows = db
+    .prepare(
+      `SELECT *
+       FROM sessions
+       WHERE pi_session_id = ?
+         AND status IN ('working', 'idle')
+         AND agent_managed = 1
+       ORDER BY last_event_at DESC`,
+    )
+    .all(piSessionId) as unknown as ClaudeSessionRow[];
+  return rows.map(mapSessionRow);
+}
+
+export function countActiveManagedSessionsByPi(db: BlackboardDatabase, piSessionId: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM sessions
+       WHERE pi_session_id = ?
+         AND status IN ('working', 'idle')
+         AND agent_managed = 1`,
+    )
+    .get(piSessionId) as { count: number };
+  return Number(row.count);
 }
 

@@ -64,7 +64,7 @@ export function touchPiPrompt(
   db: BlackboardDatabase,
   piSessionId: string,
   timestamp: string,
-  status: Extract<PersistedPiSessionStatus, "active" | "idle"> = "active",
+  status: Extract<PersistedPiSessionStatus, "active" | "waiting_for_user" | "waiting_for_sessions"> = "active",
 ): void {
   touchPiSessionPrompt(db, piSessionId, timestamp, status);
 }
@@ -73,9 +73,23 @@ export function touchPiEvent(
   db: BlackboardDatabase,
   piSessionId: string,
   timestamp: string,
-  status: Extract<PersistedPiSessionStatus, "active" | "idle"> = "active",
+  status: Extract<PersistedPiSessionStatus, "active" | "waiting_for_user" | "waiting_for_sessions"> = "active",
 ): void {
   touchPiSessionEvent(db, piSessionId, timestamp, status);
+}
+
+export function updatePiSessionStatus(
+  db: BlackboardDatabase,
+  piSessionId: string,
+  status: PersistedPiSessionStatus,
+): void {
+  const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  db.prepare(
+    `UPDATE pi_sessions
+     SET status = ?,
+         last_event_at = MAX(last_event_at, ?)
+     WHERE pi_session_id = ?`,
+  ).run(status, now, piSessionId);
 }
 
 export function endPiSession(

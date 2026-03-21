@@ -17,10 +17,12 @@ import type {
 	WhatsAppDaemonStatus as ControlSurfaceWhatsAppStatus,
 } from "../contracts/index.ts";
 import { openBlackboard, pingBlackboard, type BlackboardDatabase } from "../blackboard/db.ts";
+import { executeCloseWorkstream } from "./tools/close-workstream.ts";
 import {
 	endPiSession,
 	reconcilePreviousPiSessions,
 	touchPiPrompt,
+	updatePiSessionStatus,
 	upsertPiSession,
 } from "../blackboard/queries/pi-sessions.ts";
 import {
@@ -118,7 +120,7 @@ export class ControlSurfaceRuntime {
 		upsertPiSession(this.blackboard, {
 			piSessionId: created.session.sessionId,
 			role: "orchestrator",
-			status: "idle",
+			status: "waiting_for_user",
 			runtimeInstanceId: this.runtimeInstanceId,
 			pid: process.pid,
 			sessionFile: created.session.sessionFile,
@@ -235,6 +237,8 @@ export class ControlSurfaceRuntime {
 				tmux_session: pickString(payload, ["tmux_session", "tmuxSession", "AUTONOMA_TMUX_SESSION"]),
 				task_description: pickString(payload, ["task_description", "taskDescription", "AUTONOMA_TASK_DESCRIPTION"]),
 				todoist_task_id: pickString(payload, ["todoist_task_id", "todoistTaskId", "AUTONOMA_TODOIST_TASK_ID"]),
+				pi_session_id: pickString(payload, ["pi_session_id", "piSessionId", "AUTONOMA_PI_SESSION_ID"]),
+				workstream_id: pickString(payload, ["workstream_id", "workstreamId", "AUTONOMA_WORKSTREAM_ID"]),
 			});
 		} else {
 			// For stop/session-end, only process known sessions
@@ -340,8 +344,12 @@ export class ControlSurfaceRuntime {
 
 	private async processQueueItem(item: QueueItem): Promise<void> {
 		if (!this.piSession) throw new Error("Pi session not initialized");
+		const piSessionId = this.piSession.sessionId;
+
+		// FR-3: Turn starts → set Pi status to 'active'
 		const promptAt = this.sessionState.notePrompt(this.piSession.messages.length);
-		touchPiPrompt(this.blackboard, this.piSession.sessionId, promptAt, "active");
+		touchPiPrompt(this.blackboard, piSessionId, promptAt, "active");
+
 		if (this.piSession.isStreaming) {
 			await this.piSession.prompt(item.text, {
 				streamingBehavior: item.deliveryMode ?? "followUp",
@@ -351,6 +359,9 @@ export class ControlSurfaceRuntime {
 			await this.piSession.prompt(item.text, { images: item.images });
 		}
 		this.sessionState.noteEvent(this.piSession.messages.length);
+
+		// FR-3: Turn ends → transition to waiting_for_sessions or waiting_for_user
+		this.transitionPiAfterTurn(piSessionId);
 
 		// Auto-surface final assistant message to WhatsApp
 		const finalText = this.extractFinalAssistantText();
@@ -365,6 +376,30 @@ export class ControlSurfaceRuntime {
 			} catch (error) {
 				this.log(`auto-surface to WhatsApp failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
+		}
+	}
+
+	/**
+	 * FR-3: After a Pi turn ends, check managed CC sessions to determine next state.
+	 * If active managed sessions exist → waiting_for_sessions
+	 * If none → waiting_for_user
+	 */
+	private transitionPiAfterTurn(piSessionId: string): void {
+		try {
+			// TODO: countActiveManagedSessionsByPi is being created by another agent in sessions.ts
+			// Once available, uncomment the import at top and use:
+			// const activeCount = countActiveManagedSessionsByPi(this.blackboard, piSessionId);
+			// For now, query directly as a temporary bridge:
+			const row = this.blackboard.prepare(
+				`SELECT COUNT(*) as count FROM sessions
+				 WHERE pi_session_id = ? AND status IN ('working', 'idle') AND agent_managed = 1`,
+			).get(piSessionId) as { count: number } | undefined;
+			const activeCount = row?.count ?? 0;
+
+			const nextStatus = activeCount > 0 ? "waiting_for_sessions" : "waiting_for_user";
+			updatePiSessionStatus(this.blackboard, piSessionId, nextStatus);
+		} catch (error) {
+			this.log(`pi state transition failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
 
@@ -426,6 +461,27 @@ export class ControlSurfaceRuntime {
 						content: [{ type: "text", text: "Resources reloaded. Skills, extensions, prompts, context files, and system prompt have been refreshed." }],
 						details: { reloadedAt: new Date().toISOString() },
 					};
+				},
+			},
+			{
+				name: "close_workstream",
+				label: "Close Workstream",
+				description:
+					"Close the current workstream. Only call when the human explicitly confirms the work is done. Cleans up the git worktree, closes the workstream, and ends this orchestrator session.",
+				parameters: {
+					type: "object",
+					properties: {
+						workstream_id: { type: "string", description: "ID of the workstream to close" },
+					},
+					required: ["workstream_id"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					if (!this.piSession) {
+						return { content: [{ type: "text", text: "Error: Pi session not initialized" }], details: {} };
+					}
+					const result = executeCloseWorkstream(this.blackboard, this.piSession.sessionId, params.workstream_id);
+					return { content: [{ type: "text", text: result.message }], details: result };
 				},
 			},
 		];

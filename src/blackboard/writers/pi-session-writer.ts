@@ -93,7 +93,7 @@ export function markPreviousPiSessionsInactive(
          end_reason = ?,
          last_event_at = MAX(last_event_at, ?)
      WHERE role = ?
-       AND status IN ('active', 'idle')
+       AND status IN ('active', 'waiting_for_user', 'waiting_for_sessions')
        AND (? IS NULL OR runtime_instance_id != ?)`
   ).run(
     options.status ?? "ended",
@@ -112,7 +112,7 @@ export function touchPiSessionPrompt(
   db: BlackboardDatabase,
   piSessionId: string,
   timestamp: string,
-  status: Extract<PiSessionStatus, "active" | "idle"> = "active",
+  status: Extract<PiSessionStatus, "active" | "waiting_for_user" | "waiting_for_sessions"> = "active",
 ): void {
   db.prepare(
     `UPDATE pi_sessions
@@ -129,7 +129,7 @@ export function touchPiSessionEvent(
   db: BlackboardDatabase,
   piSessionId: string,
   timestamp: string,
-  status: Extract<PiSessionStatus, "active" | "idle"> = "active",
+  status: Extract<PiSessionStatus, "active" | "waiting_for_user" | "waiting_for_sessions"> = "active",
 ): void {
   db.prepare(
     `UPDATE pi_sessions

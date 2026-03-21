@@ -56,6 +56,8 @@ export interface ClaudeSessionListItem {
   todoistTaskId: string | null;
   agentManaged: boolean;
   sessionEndReason: string | null;
+  workstreamId: string | null;
+  piSessionId: string | null;
   startedAt: string;
   endedAt: string | null;
   lastEventAt: string;

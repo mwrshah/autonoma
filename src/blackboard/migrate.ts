@@ -196,6 +196,68 @@ function applyV4Migration(db: DatabaseSync): void {
   }
 }
 
+function applyV5Migration(db: DatabaseSync): void {
+  db.exec("PRAGMA foreign_keys=OFF;");
+  db.exec("BEGIN IMMEDIATE;");
+
+  try {
+    // 1. Add pi_session_id to sessions
+    db.exec("ALTER TABLE sessions ADD COLUMN pi_session_id TEXT REFERENCES pi_sessions(pi_session_id) ON DELETE SET NULL;");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_sessions_pi_session ON sessions(pi_session_id);");
+
+    // 2. Add status + closed_at to workstreams
+    db.exec("ALTER TABLE workstreams ADD COLUMN status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed'));");
+    db.exec("ALTER TABLE workstreams ADD COLUMN closed_at TEXT;");
+
+    // 3. Recreate pi_sessions without 'idle' in CHECK constraint, migrate idle → waiting_for_user
+    db.exec(`
+      CREATE TABLE pi_sessions_v5 (
+          pi_session_id TEXT PRIMARY KEY,
+          role TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active'
+            CHECK (status IN ('active', 'waiting_for_user', 'waiting_for_sessions', 'ended', 'crashed')),
+          runtime_instance_id TEXT,
+          pid INTEGER,
+          session_file TEXT,
+          cwd TEXT NOT NULL,
+          agent_dir TEXT,
+          model_provider TEXT,
+          model_id TEXT,
+          thinking_level TEXT,
+          started_at DATETIME NOT NULL,
+          last_prompt_at DATETIME,
+          last_event_at DATETIME NOT NULL,
+          ended_at DATETIME,
+          end_reason TEXT
+      );
+
+      INSERT INTO pi_sessions_v5
+        SELECT pi_session_id, role,
+          CASE WHEN status = 'idle' THEN 'waiting_for_user' ELSE status END,
+          runtime_instance_id, pid, session_file, cwd, agent_dir,
+          model_provider, model_id, thinking_level,
+          started_at, last_prompt_at, last_event_at, ended_at, end_reason
+        FROM pi_sessions;
+
+      DROP TABLE pi_sessions;
+      ALTER TABLE pi_sessions_v5 RENAME TO pi_sessions;
+
+      CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
+      CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);
+      CREATE INDEX IF NOT EXISTS idx_pi_sessions_last_event_at ON pi_sessions(last_event_at);
+
+      INSERT OR IGNORE INTO schema_migrations(version) VALUES (5);
+    `);
+
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys=ON;");
+  }
+}
+
 export function migrateBlackboard(db: DatabaseSync): number {
   ensureSchemaTables(db);
 
@@ -212,6 +274,11 @@ export function migrateBlackboard(db: DatabaseSync): number {
 
   if (version < 4) {
     applyV4Migration(db);
+    version = getSchemaVersion(db);
+  }
+
+  if (version < 5) {
+    applyV5Migration(db);
   }
 
   return getSchemaVersion(db);

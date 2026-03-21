@@ -1,7 +1,8 @@
-export const BLACKBOARD_SCHEMA_VERSION = 4;
+export const BLACKBOARD_SCHEMA_VERSION = 5;
 
 export type ClaudeSessionStatus = "working" | "idle" | "stale" | "ended";
-export type PiSessionStatus = "active" | "idle" | "waiting_for_user" | "waiting_for_sessions" | "ended" | "crashed";
+export type PiSessionStatus = "active" | "waiting_for_user" | "waiting_for_sessions" | "ended" | "crashed";
+export type WorkstreamStatus = "open" | "closed";
 export type WhatsAppMessageDirection = "inbound" | "outbound";
 export type WhatsAppMessageStatus = "pending" | "sent" | "delivered" | "processed" | "failed";
 export type PendingActionStatus = "pending" | "resolved" | "expired" | "canceled";
@@ -26,7 +27,9 @@ export interface WorkstreamRow {
   name: string;
   repo_path: string | null;
   worktree_path: string | null;
+  status: WorkstreamStatus;
   created_at: string;
+  closed_at: string | null;
 }
 
 export interface ClaudeSessionRow {
@@ -46,6 +49,7 @@ export interface ClaudeSessionRow {
   agent_managed: number | boolean | null;
   session_end_reason: string | null;
   workstream_id: string | null;
+  pi_session_id: string | null;
   started_at: string;
   ended_at: string | null;
   last_event_at: string;
@@ -94,7 +98,9 @@ CREATE TABLE IF NOT EXISTS workstreams (
     name TEXT NOT NULL,
     repo_path TEXT,
     worktree_path TEXT,
-    created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    created_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    closed_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -115,6 +121,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_managed BOOLEAN DEFAULT 0,
     session_end_reason TEXT,
     workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
+    pi_session_id TEXT REFERENCES pi_sessions(pi_session_id) ON DELETE SET NULL,
     started_at DATETIME NOT NULL,
     ended_at DATETIME,
     last_event_at DATETIME NOT NULL,
@@ -125,7 +132,7 @@ CREATE TABLE IF NOT EXISTS pi_sessions (
     pi_session_id TEXT PRIMARY KEY,
     role TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active'
-      CHECK (status IN ('active', 'idle', 'waiting_for_user', 'waiting_for_sessions', 'ended', 'crashed')),
+      CHECK (status IN ('active', 'waiting_for_user', 'waiting_for_sessions', 'ended', 'crashed')),
     runtime_instance_id TEXT,
     pid INTEGER,
     session_file TEXT,
@@ -174,6 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project);
 CREATE INDEX IF NOT EXISTS idx_sessions_last_event_at ON sessions(last_event_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_workstream ON sessions(workstream_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_pi_session ON sessions(pi_session_id);
 CREATE INDEX IF NOT EXISTS idx_workstreams_name ON workstreams(name);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_status ON pi_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_pi_sessions_role_status ON pi_sessions(role, status);

@@ -117,8 +117,11 @@ export function subscribeToPiSession(
 ): () => void {
   return session.subscribe((event) => {
     const now = state.noteEvent(session.messages.length);
-    const activeStatus = event.type === "turn_end" || event.type === "agent_end" ? "idle" : "active";
-    touchPiEvent(blackboard, session.sessionId, now, activeStatus);
+    // FR-3: Only set 'active' during turns. Post-turn transitions (waiting_for_user/waiting_for_sessions)
+    // are handled by runtime.transitionPiAfterTurn(), not the event subscriber.
+    if (event.type !== "turn_end" && event.type !== "agent_end") {
+      touchPiEvent(blackboard, session.sessionId, now, "active");
+    }
 
     switch (event.type) {
       case "message_update": {

@@ -28,6 +28,8 @@ export interface LaunchClaudeSessionInput {
   sessionName?: string;
   taskDescription?: string;
   todoistTaskId?: string;
+  piSessionId?: string;
+  workstreamId?: string;
   claudeCommand?: string;
   extraArgs?: string[];
 }

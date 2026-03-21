@@ -33,6 +33,8 @@ function buildClaudeCommand(input: LaunchClaudeSessionInput, launchId: string, t
     ["AUTONOMA_TMUX_SESSION", tmuxSession],
     ["AUTONOMA_TASK_DESCRIPTION", input.taskDescription ?? ""],
     ["AUTONOMA_TODOIST_TASK_ID", input.todoistTaskId ?? ""],
+    ["AUTONOMA_PI_SESSION_ID", input.piSessionId ?? ""],
+    ["AUTONOMA_WORKSTREAM_ID", input.workstreamId ?? ""],
   ];
 
   const envPrefix = envPairs.map(([key, value]) => `${key}=${shellEscape(value)}`).join(" ");

@@ -4,7 +4,7 @@ import type { WorkstreamRow } from "../../contracts/index.ts";
 
 export function listOpenWorkstreams(db: BlackboardDatabase): WorkstreamRow[] {
 	return db
-		.prepare("SELECT * FROM workstreams ORDER BY created_at DESC")
+		.prepare("SELECT * FROM workstreams WHERE status = 'open' ORDER BY created_at DESC")
 		.all() as unknown as WorkstreamRow[];
 }
 
@@ -24,4 +24,23 @@ export function insertWorkstream(db: BlackboardDatabase, name: string): Workstre
 	const id = crypto.randomUUID();
 	db.prepare("INSERT INTO workstreams (id, name) VALUES (?, ?)").run(id, name);
 	return getWorkstreamById(db, id)!;
+}
+
+export function closeWorkstream(db: BlackboardDatabase, workstreamId: string): void {
+	db.prepare(
+		`UPDATE workstreams
+		 SET status = 'closed', closed_at = datetime('now')
+		 WHERE id = ? AND status = 'open'`,
+	).run(workstreamId);
+}
+
+export function listRecentlyClosedWorkstreams(db: BlackboardDatabase, withinHours: number): WorkstreamRow[] {
+	return db
+		.prepare(
+			`SELECT * FROM workstreams
+			 WHERE status = 'closed'
+			   AND closed_at >= datetime('now', '-' || ? || ' hours')
+			 ORDER BY closed_at DESC`,
+		)
+		.all(withinHours) as unknown as WorkstreamRow[];
 }
