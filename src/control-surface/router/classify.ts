@@ -45,6 +45,11 @@ function truncate(text: string, maxLen: number): string {
 	return oneLine.length <= maxLen ? oneLine : oneLine.slice(0, maxLen - 1) + "…";
 }
 
+function formatSnippetLabel(s: ConversationSnippet): string {
+	if (s.direction === "outbound") return "Agent";
+	return "User";
+}
+
 function buildConversationBlock(
 	workstreams: WorkstreamRow[],
 	recentConversation: Map<string, ConversationSnippet[]>,
@@ -56,12 +61,28 @@ function buildConversationBlock(
 
 	if (withConversation.length === 0) return "";
 
+	// Find the most recent agent message across all workstreams
+	let latestAgentWsId: string | null = null;
+	let latestAgentTime = "";
+	for (const [wsId, snippets] of recentConversation) {
+		for (const s of snippets) {
+			if (s.direction === "outbound" && s.created_at > latestAgentTime) {
+				latestAgentTime = s.created_at;
+				latestAgentWsId = wsId;
+			}
+		}
+	}
+
 	const sections = withConversation.map((ws) => {
 		const snippets = recentConversation.get(ws.id)!;
-		const lines = snippets.map(
-			(s) => `- [${s.source}] "${truncate(s.content, 100)}" (${relativeTime(s.created_at)})`,
-		);
-		return `### ${ws.name} (${ws.id.slice(0, 8)})\n${lines.join("\n")}`;
+		const lines = snippets.map((s) => {
+			const label = formatSnippetLabel(s);
+			return `- [${s.source}] ${label}: "${truncate(s.content, 100)}" (${relativeTime(s.created_at)})`;
+		});
+		const heading = ws.id === latestAgentWsId
+			? `### ${ws.name} (${ws.id.slice(0, 8)}) ← last agent response`
+			: `### ${ws.name} (${ws.id.slice(0, 8)})`;
+		return `${heading}\n${lines.join("\n")}`;
 	});
 
 	return `\n## Recent conversation per workstream\n${sections.join("\n\n")}\n`;
@@ -108,7 +129,10 @@ ${projectBlock}
 4. When in doubt between matching an existing workstream and creating a new one, prefer matching the existing one.
 5. A message that references a known project by name should be matched to an existing workstream for that project if one exists, or trigger a new workstream if not.
 6. If the message relates to a recently closed workstream, return its id. Do not create a duplicate workstream for recently completed work.
-7. Use the recent conversation snippets to understand context when deciding if the message relates to an existing workstream.
+7. Use the recent conversation snippets to understand context when deciding if the message relates to an existing workstream. Agent messages show what the assistant last said to the user — short/ambiguous user replies (e.g. "yes", "sure", "do it") are almost certainly responding to the workstream that sent the most recent agent message (marked with "← last agent response").
+8. Session management commands (kill tmux, close sessions, check status, restart daemon, close tmux windows, quit claude) are NOT work — set is_work_message to false. These are infrastructure meta-operations.
+9. Cron health-check messages (containing "Cron idle check", "Cron stale session check", or similar automated system messages) are NOT work — set is_work_message to false.
+10. Workstreams are about repository-scoped coding/engineering work (features, bugs, investigations in a project), not meta-operations on the Autonoma system itself or general task management.
 
 ## User message
 ${message}`;
@@ -122,7 +146,7 @@ export async function classifyMessage(
 ): Promise<ClassificationResult> {
 	const workstreams = listOpenWorkstreams(db);
 	const recentlyClosed = listRecentlyClosedWorkstreams(db, 6);
-	const recentConversation = getRecentConversationByWorkstream(db, 12, 3);
+	const recentConversation = getRecentConversationByWorkstream(db, 12, 5);
 	const projects = listProjectDirs(projectsDir);
 	const prompt = buildClassificationPrompt(message, workstreams, recentlyClosed, recentConversation, projects);
 

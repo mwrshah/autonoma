@@ -73,7 +73,7 @@ export function loadConfig(): AutonomaConfig {
 	const whatsappDaemonPath = expandHome(String(raw.whatsappDaemonPath ?? "~/.autonoma/whatsapp/daemon.js"));
 	const projectsDir = expandHome(String(raw.projectsDir ?? "~/development"));
 	const geminiApiKey = String(raw.geminiApiKey ?? process.env.GEMINI_API_KEY ?? "");
-	const wipeWorkstreamsOnStart = Boolean(raw.wipeWorkstreamsOnStart ?? process.env.AUTONOMA_WIPE_WORKSTREAMS === "1" ?? false);
+	const wipeWorkstreamsOnStart = Boolean(raw.wipeWorkstreamsOnStart ?? (process.env.AUTONOMA_WIPE_WORKSTREAMS === "1"));
 	const configuredPiModel = String(raw.piModel ?? "");
 	const configuredClaudeCliCommand = String(raw.claudeCliCommand ?? "");
 	const config: AutonomaConfig = {

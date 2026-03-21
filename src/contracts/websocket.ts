@@ -34,12 +34,14 @@ type QueuedTurnSummary = {
 export interface QueueItemStartWebSocketEvent {
   type: "queue_item_start";
   item: QueuedTurnSummary;
+  workstreamId?: string;
 }
 
 export interface QueueItemEndWebSocketEvent {
   type: "queue_item_end";
   itemId: string;
   error?: string;
+  workstreamId?: string;
 }
 
 export interface MessageQueuedWebSocketEvent {
@@ -94,6 +96,7 @@ export interface PiSurfacedWebSocketEvent {
   type: "pi_surfaced";
   content: string;
   timestamp?: string;
+  workstreamId?: string;
 }
 
 export type ControlSurfaceWebSocketServerEvent =

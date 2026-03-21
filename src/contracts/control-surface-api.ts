@@ -66,11 +66,25 @@ export interface ClaudeSessionListItem {
 
 export type ClaudeSessionDetail = ClaudeSessionListItem;
 
+export interface PiOrchestratorStatus {
+  sessionId: string;
+  workstreamId: string;
+  workstreamName: string | null;
+  messageCount: number;
+  queueDepth: number;
+  busy: boolean;
+}
+
+export interface PiMultiSessionStatus {
+  default: PiRuntimeStatus;
+  orchestrators: PiOrchestratorStatus[];
+}
+
 export interface StatusResponse {
   ok: true;
   pid: number;
   uptime: number;
-  pi: PiRuntimeStatus;
+  pi: PiMultiSessionStatus;
   whatsapp: WhatsAppRuntimeStatus;
   blackboard: BlackboardHealth;
 }

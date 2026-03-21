@@ -69,6 +69,8 @@ export type ConversationSnippet = {
   content: string;
   source: string;
   created_at: string;
+  direction: "inbound" | "outbound";
+  sender: string | null;
 };
 
 export function getRecentConversationByWorkstream(
@@ -78,12 +80,10 @@ export function getRecentConversationByWorkstream(
 ): Map<string, ConversationSnippet[]> {
   const rows = db.prepare(
     `SELECT m.workstream_id, w.name AS workstream_name,
-            m.content, m.source, m.created_at
+            m.content, m.source, m.created_at, m.direction, m.sender
      FROM messages m
      JOIN workstreams w ON w.id = m.workstream_id AND w.status = 'open'
      WHERE m.created_at >= datetime('now', '-' || ? || ' hours')
-       AND m.direction = 'inbound'
-       AND m.sender = 'user'
      ORDER BY m.workstream_id, m.created_at DESC`,
   ).all(withinHours) as unknown as ConversationSnippet[];
 

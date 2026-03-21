@@ -24,18 +24,16 @@ export async function handleMessageRoute(runtime: ControlSurfaceRuntime, req: ht
   const formatted = formatInboundMessage(body.text, source, body.metadata);
 
   // Router: classify human messages against workstreams (hooks/cron bypass)
-  let routerPrefix = "";
   let workstreamMeta: Record<string, unknown> = {};
   if (source === "web" || source === "whatsapp") {
     const classification = await routeMessage(runtime, body.text);
     if (classification) {
-      routerPrefix = classification.prefix;
       workstreamMeta = classification.metadata;
     }
   }
 
   const queued = runtime.enqueue({
-    text: routerPrefix + formatted,
+    text: formatted,
     source,
     metadata: { ...body.metadata, ...workstreamMeta },
     deliveryMode,
@@ -49,7 +47,7 @@ export async function handleMessageRoute(runtime: ControlSurfaceRuntime, req: ht
 async function routeMessage(
   runtime: ControlSurfaceRuntime,
   rawText: string,
-): Promise<{ prefix: string; metadata: Record<string, unknown> } | null> {
+): Promise<{ metadata: Record<string, unknown> } | null> {
   const { geminiApiKey, projectsDir } = runtime.config;
   if (!geminiApiKey) return null;
 
@@ -62,16 +60,8 @@ async function routeMessage(
     if (result.workstream) {
       meta.workstream_id = result.workstream.id;
       meta.workstream_name = result.workstream.name;
-      const parts = [
-        `[Workstream: "${result.workstream.name}" (${result.workstream.id.slice(0, 8)})]`,
-        result.action === "created" ? " [NEW]" : "",
-        result.workstream.repo_path ? ` [repo: ${result.workstream.repo_path}]` : "",
-        result.workstream.worktree_path ? ` [worktree: ${result.workstream.worktree_path}]` : "",
-        "\n",
-      ];
-      return { prefix: parts.join(""), metadata: meta };
     }
-    return { prefix: "", metadata: meta };
+    return { metadata: meta };
   } catch {
     return null;
   }
@@ -88,22 +78,11 @@ function normalizeSource(source?: string): MessageSource {
   }
 }
 
-function formatInboundMessage(text: string, source: MessageSource, metadata?: Record<string, unknown>): string {
+function formatInboundMessage(text: string, source: MessageSource, _metadata?: Record<string, unknown>): string {
+  // Hook and cron messages are structured content — pass through unchanged
   if (source === "cron" || source === "hook") {
     return text;
   }
-  if (source === "whatsapp") {
-    const contextRef =
-      typeof metadata?.contextRef === "string"
-        ? metadata.contextRef
-        : typeof metadata?.context_ref === "string"
-          ? metadata.context_ref
-          : undefined;
-    const refTag = contextRef ? ` (ref:${contextRef.slice(-5).toUpperCase()})` : "";
-    return `[WhatsApp] User${refTag}: ${text}`;
-  }
-  if (source === "web") {
-    return `[Web] User: \"${text}\"`;
-  }
+  // Web and WhatsApp: return raw user text (no source prefix or quote wrapping)
   return text;
 }

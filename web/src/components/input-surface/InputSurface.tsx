@@ -247,7 +247,7 @@ export function InputSurface() {
     staleTime: 5 * 60 * 1000,
     refetchOnWindowFocus: false,
   });
-  const sentTextsRef = useRef<Set<string>>(new Set());
+
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
 
@@ -289,12 +289,6 @@ export function InputSurface() {
       if (message.type === "message_end") {
         const content = message.content || "";
         if (message.role === "user") {
-          for (const sent of sentTextsRef.current) {
-            if (content === `[Web] User: "${sent}"`) {
-              sentTextsRef.current.delete(sent);
-              return;
-            }
-          }
           if (content.trim()) {
             const parsed = parseUserMessageSource(content);
             setTimeline((current) => [
@@ -393,20 +387,6 @@ export function InputSurface() {
     setDraft("");
     setPendingImages([]);
     isAtBottomRef.current = true;
-
-    setTimeline((current) => [
-      ...current,
-      {
-        id: createId("user"),
-        kind: "message",
-        role: "user",
-        content: text || "(image)",
-        images,
-        source: "web" as MessageSource,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-    if (text) sentTextsRef.current.add(text);
 
     try {
       await wsClient.sendMessage(text || "(image)", deliveryMode, images);

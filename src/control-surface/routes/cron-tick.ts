@@ -29,13 +29,14 @@ export function handleCronTickRoute(
   }
 
   // Gate 1: Pi not active (already processing a turn)
-  const snapshot = runtime.sessionState.getSnapshot();
+  const defaultPi = runtime.sessionManager.getDefault();
+  const snapshot = defaultPi.state.getSnapshot();
   if (snapshot.busy) {
     return skip(res, "pi_active");
   }
 
   // Gate 2: Pi not ended/crashed
-  if (!runtime.piSession) {
+  if (!defaultPi.session) {
     return skip(res, "pi_ended");
   }
 

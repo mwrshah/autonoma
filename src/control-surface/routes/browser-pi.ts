@@ -12,7 +12,8 @@ export async function handleBrowserPiHistoryRoute(
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
   const historyMode = url.searchParams.get("surface") === "input" ? "input" : "agent";
 
-  const snapshot = runtime.sessionState.getSnapshot();
+  const defaultPi = runtime.sessionManager.getDefault();
+  const snapshot = defaultPi.state.getSnapshot();
   if (!snapshot.sessionId) {
     const body: PiHistoryResponse = {
       sessionId: null,
@@ -22,11 +23,11 @@ export async function handleBrowserPiHistoryRoute(
     return sendJson(response, 200, body);
   }
 
-  if (runtime.piSession?.sessionId === snapshot.sessionId && Array.isArray(runtime.piSession.messages)) {
+  if (defaultPi.session?.sessionId === snapshot.sessionId && Array.isArray(defaultPi.session.messages)) {
     const body = readPiHistoryFromMessages(
       snapshot.sessionId,
       snapshot.sessionFile ?? null,
-      runtime.piSession.messages,
+      defaultPi.session.messages,
       historyMode,
     );
     if (body.items.length > 0 || !snapshot.sessionFile) {

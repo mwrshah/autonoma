@@ -21,11 +21,8 @@ import { executeCloseWorkstream } from "./tools/close-workstream.ts";
 import { executeCreateWorktree } from "./tools/create-worktree.ts";
 import { resetAllWorkstreams } from "../blackboard/queries/workstreams.ts";
 import {
-	endPiSession,
-	reconcilePreviousPiSessions,
 	touchPiPrompt,
 	updatePiSessionStatus,
-	upsertPiSession,
 } from "../blackboard/queries/pi-sessions.ts";
 import {
 	findIdleCleanupCandidates,
@@ -38,10 +35,10 @@ import {
 } from "../blackboard/queries/sessions.ts";
 import { killTmuxSession } from "../claude-sessions/tmux.ts";
 import { readTranscriptPage } from "./transcript.ts";
-import { createAutonomaAgent } from "./pi/create-agent.ts";
-import { PiSessionState } from "./pi/session-state.ts";
-import { subscribeToPiSession } from "./pi/subscribe.ts";
-import { TurnQueue, type QueueItem, type QueueSource } from "./queue/turn-queue.ts";
+import { extractLastAssistantText } from "./transcript-reader.ts";
+import { formatPromptWithContext } from "./pi/format-prompt.ts";
+import { PiSessionManager, type ManagedPiSession } from "./pi/session-manager.ts";
+import type { QueueItem, QueueSource } from "./queue/turn-queue.ts";
 import { WebSocketHub, type WebSocketClient } from "./ws/hub.ts";
 import { sendDaemonCommand } from "../whatsapp/ipc.ts";
 import { getDaemonStatus, startDaemonProcess, stopDaemonProcess, waitForDaemonReady } from "../whatsapp/process.ts";
@@ -63,15 +60,11 @@ const ACCEPTED_HOOK_EVENTS = new Set(["session-start", "stop", "session-end"]);
 export class ControlSurfaceRuntime {
 	readonly config: AutonomaConfig;
 	readonly blackboard: BlackboardDatabase;
-	readonly sessionState = new PiSessionState();
 	readonly runtimeInstanceId = crypto.randomUUID();
 	readonly startedAt = Date.now();
 	readonly wsHub: WebSocketHub;
-	readonly queue: TurnQueue;
+	readonly sessionManager: PiSessionManager;
 	server?: http.Server;
-	piSession?: any;
-	piModelInfo?: { provider?: string; id?: string };
-	private unsubscribePi?: () => void;
 	private stopping = false;
 	private maintenanceTimer?: NodeJS.Timeout;
 	private whatsappStatusCache: {
@@ -88,28 +81,15 @@ export class ControlSurfaceRuntime {
 		this.config = config;
 		this.blackboard = openBlackboard(config.blackboardPath);
 		this.wsHub = new WebSocketHub(this.handleWebSocketMessage.bind(this));
-		this.queue = new TurnQueue({
-			process: this.processQueueItem.bind(this),
-			onDepthChange: (depth) => this.sessionState.setQueueDepth(depth),
-			onItemStart: (item) => {
-				this.sessionState.setBusy(true, item);
-				this.wsHub.broadcast({ type: "queue_item_start", item });
-			},
-			onItemEnd: (item, error) => {
-				this.sessionState.setBusy(false);
-				if (error) {
-					const detail = error instanceof Error
-						? `${error.message}${(error as any).status ? ` [status=${(error as any).status}]` : ""}${(error as any).body ? ` body=${JSON.stringify((error as any).body).slice(0, 200)}` : ""}`
-						: String(error);
-					this.log(`queue item ${item.id} failed: ${detail}`);
-				}
-				this.wsHub.broadcast({
-					type: "queue_item_end",
-					itemId: item.id,
-					error: error instanceof Error ? error.message : error ? String(error) : undefined,
-				});
-			},
-		});
+		this.sessionManager = new PiSessionManager(
+			config,
+			this.blackboard,
+			this.wsHub,
+			this.runtimeInstanceId,
+			this.startedAt,
+			this.processQueueItem.bind(this),
+			this.log.bind(this),
+		);
 	}
 
 	attachServer(server: http.Server): void {
@@ -118,36 +98,13 @@ export class ControlSurfaceRuntime {
 
 	async start(): Promise<void> {
 		this.ensurePidFile();
-		reconcilePreviousPiSessions(this.blackboard, "orchestrator", this.runtimeInstanceId, "restart");
 
 		if (this.config.wipeWorkstreamsOnStart) {
 			const closed = resetAllWorkstreams(this.blackboard);
 			if (closed > 0) this.log(`wiped ${closed} open workstream(s) on startup (wipeWorkstreamsOnStart=true)`);
 		}
 
-		const created = await createAutonomaAgent({
-			config: this.config,
-			customTools: this.createCustomTools("orchestrator"),
-		});
-		this.piSession = created.session;
-		this.piModelInfo = created.modelInfo;
-		this.sessionState.initialize(created.session.sessionId, created.session.sessionFile, created.session.messages.length);
-		upsertPiSession(this.blackboard, {
-			piSessionId: created.session.sessionId,
-			role: "orchestrator",
-			status: "waiting_for_user",
-			runtimeInstanceId: this.runtimeInstanceId,
-			pid: process.pid,
-			sessionFile: created.session.sessionFile,
-			cwd: path.join(process.env.HOME ?? "/home/mas", "development"),
-			agentDir: this.config.controlSurfaceAgentDir,
-			modelProvider: created.modelInfo.provider,
-			modelId: created.modelInfo.id,
-			thinkingLevel: this.config.piThinkingLevel,
-			startedAt: new Date(this.startedAt).toISOString(),
-			lastEventAt: new Date().toISOString(),
-		});
-		this.unsubscribePi = subscribeToPiSession(created.session, this.sessionState, this.blackboard, this.wsHub);
+		await this.sessionManager.createDefault(this.createCustomTools("default"));
 		await this.ensureWhatsAppDaemon();
 		await this.refreshWhatsAppStatus();
 		this.startMaintenanceLoop();
@@ -155,31 +112,12 @@ export class ControlSurfaceRuntime {
 		this.log(`runtime started on ${this.config.controlSurfaceHost}:${this.config.controlSurfacePort}`);
 	}
 
-	async stop(reason: string = "shutdown", crash: boolean = false): Promise<void> {
+	async stop(reason: string = "shutdown", _crash: boolean = false): Promise<void> {
 		if (this.stopping) return;
 		this.stopping = true;
 		this.log(`runtime stopping: ${reason}`);
-		this.queue.stop();
 		if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
-		try {
-			this.unsubscribePi?.();
-		} catch {
-			// ignore
-		}
-		if (this.piSession) {
-			endPiSession(
-				this.blackboard,
-				this.piSession.sessionId,
-				crash ? "crashed" : "ended",
-				reason,
-				new Date().toISOString(),
-			);
-			try {
-				this.piSession.dispose?.();
-			} catch {
-				// ignore
-			}
-		}
+		this.sessionManager.disposeAll();
 		try {
 			await this.stopWhatsAppDaemon();
 			await this.refreshWhatsAppStatus();
@@ -203,6 +141,9 @@ export class ControlSurfaceRuntime {
 		this.blackboard.close();
 	}
 
+	/**
+	 * Route a message to the correct Pi session's queue based on classification metadata.
+	 */
 	enqueue(input: EnqueueInput): { ok: true; queued: true; queueDepth: number; item: QueueItem } {
 		const images = input.images?.map((img) => ({ type: "image" as const, data: img.data, mimeType: img.mimeType }));
 		const item: QueueItem = {
@@ -215,8 +156,6 @@ export class ControlSurfaceRuntime {
 			deliveryMode: input.deliveryMode ?? "followUp",
 			images: images?.length ? images : undefined,
 		};
-		const queueDepth = this.queue.enqueue(item);
-		this.log(`queued ${item.source} item ${item.id} depth=${queueDepth}`);
 
 		// Persist to unified messages table
 		try {
@@ -233,6 +172,11 @@ export class ControlSurfaceRuntime {
 			this.log(`message persist failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 
+		// Route to the correct session's queue
+		const target = this.resolveTargetSession(input, item);
+		const queueDepth = target.queue.enqueue(item);
+		this.log(`queued ${item.source} item ${item.id} → ${target.role}${target.workstreamId ? ` ws=${target.workstreamId}` : ""} depth=${queueDepth}`);
+
 		return { ok: true, queued: true, queueDepth, item };
 	}
 
@@ -247,16 +191,14 @@ export class ControlSurfaceRuntime {
 			return { ok: true, filtered: true };
 		}
 
-		const piSessionId = this.piSession?.sessionId;
-		const isOwnPiSession = piSessionId && sessionId === piSessionId;
+		// Check if this session belongs to any of our Pi sessions
+		const isOwnPiSession = this.sessionManager.getByPiSessionId(sessionId) !== undefined;
 
 		if (normalized === "session-start") {
-			// Gate: only track sessions that declared AUTONOMA_AGENT_MANAGED=1
 			const agentManaged = payload.agent_managed === true || payload.agent_managed === 1;
 			if (!agentManaged && !isOwnPiSession) {
 				return { ok: true, filtered: true };
 			}
-			// Write session to blackboard
 			insertSession(this.blackboard, {
 				session_id: sessionId,
 				cwd: pickString(payload, ["cwd"]),
@@ -273,7 +215,6 @@ export class ControlSurfaceRuntime {
 				workstream_id: pickString(payload, ["workstream_id", "workstreamId", "AUTONOMA_WORKSTREAM_ID"]),
 			});
 		} else {
-			// For stop/session-end, only process known sessions
 			if (!isOwnPiSession) {
 				const known = getSessionById(this.blackboard, sessionId);
 				if (!known) {
@@ -289,37 +230,95 @@ export class ControlSurfaceRuntime {
 			}
 		}
 
-		// Only forward "stop" events to Pi — that's when a session goes idle and Pi needs to decide next steps.
-		// session-start and session-end are bookkeeping only (already written to SQLite above).
 		if (normalized !== "stop") {
 			return { ok: true, queued: false, bookkeeping: true };
 		}
 
+		// Extract last assistant message from the CC session transcript for Pi context
+		const transcriptPath = pickString(payload, ["transcript_path", "transcriptPath"]);
+		if (transcriptPath) {
+			const lastOutput = extractLastAssistantText(transcriptPath);
+			if (lastOutput) {
+				(payload as Record<string, unknown>).lastAssistantText = lastOutput;
+			}
+		}
+
+		// Route stop event to the Pi session that owns this CC session
+		const piSessionIdFromPayload = pickString(payload, ["pi_session_id", "piSessionId", "AUTONOMA_PI_SESSION_ID"]);
+		let targetQueue: ManagedPiSession | undefined;
+		if (piSessionIdFromPayload) {
+			targetQueue = this.sessionManager.getByPiSessionId(piSessionIdFromPayload);
+		}
+		if (!targetQueue) {
+			// Fall back: look up pi_session_id from the sessions table
+			const ccSession = getSessionById(this.blackboard, sessionId);
+			if (ccSession?.piSessionId) {
+				targetQueue = this.sessionManager.getByPiSessionId(ccSession.piSessionId);
+			}
+		}
+		if (!targetQueue) {
+			targetQueue = this.sessionManager.getDefault();
+		}
+
 		const text = formatHookMessage(normalized, payload);
-		const queued = this.enqueue({
-			text,
+		const hookItem: QueueItem = {
+			id: crypto.randomUUID(),
 			source: "hook",
+			text,
 			metadata: { event: normalized, ...payload },
+			receivedAt: new Date().toISOString(),
 			deliveryMode: "followUp",
-		});
-		return { ok: true, queued: true, queueDepth: queued.queueDepth };
+		};
+
+		// Persist inbound
+		try {
+			persistInboundMessage(this.blackboard, {
+				source: "hook",
+				content: text,
+				sender: "system",
+				metadata: { event: normalized, ...payload },
+			});
+		} catch (error) {
+			this.log(`message persist failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+
+		const queueDepth = targetQueue.queue.enqueue(hookItem);
+		this.log(`queued hook stop item ${hookItem.id} → ${targetQueue.role}${targetQueue.workstreamId ? ` ws=${targetQueue.workstreamId}` : ""} depth=${queueDepth}`);
+		return { ok: true, queued: true, queueDepth };
 	}
 
 	getStatus(): StatusResponse {
-		const snapshot = this.sessionState.getSnapshot();
+		const def = this.sessionManager.getDefault();
+		const defSnapshot = def.state.getSnapshot();
 		const whatsapp = this.getWhatsAppStatusSnapshot();
 		const blackboardStatus = pingBlackboard(this.blackboard) ? "ok" : "error";
+
+		const orchestratorStatuses = this.sessionManager.listOrchestrators().map((o) => {
+			const snap = o.state.getSnapshot();
+			return {
+				sessionId: o.piSessionId,
+				workstreamId: o.workstreamId!,
+				workstreamName: o.workstreamName,
+				messageCount: o.session?.messages?.length ?? snap.messageCount,
+				queueDepth: snap.queueDepth,
+				busy: snap.busy,
+			};
+		});
+
 		return {
 			ok: true,
 			pid: process.pid,
 			uptime: Math.floor((Date.now() - this.startedAt) / 1000),
 			pi: {
-				sessionId: snapshot.sessionId,
-				sessionFile: snapshot.sessionFile,
-				messageCount: this.piSession?.messages?.length ?? snapshot.messageCount,
-				lastPromptAt: snapshot.lastPromptAt,
-				queueDepth: snapshot.queueDepth,
-				busy: snapshot.busy,
+				default: {
+					sessionId: defSnapshot.sessionId!,
+					sessionFile: defSnapshot.sessionFile ?? null,
+					messageCount: def.session?.messages?.length ?? defSnapshot.messageCount,
+					lastPromptAt: defSnapshot.lastPromptAt ?? null,
+					queueDepth: defSnapshot.queueDepth,
+					busy: defSnapshot.busy,
+				},
+				orchestrators: orchestratorStatuses,
 			},
 			whatsapp: {
 				status: whatsapp.status,
@@ -374,28 +373,131 @@ export class ControlSurfaceRuntime {
 		return this.wsHub.handleUpgrade(req, socket, head, this.config.controlSurfaceToken);
 	}
 
-	private async processQueueItem(item: QueueItem): Promise<void> {
-		if (!this.piSession) throw new Error("Pi session not initialized");
-		const piSessionId = this.piSession.sessionId;
+	/**
+	 * Resolve which ManagedPiSession should handle this message.
+	 * May lazily create an orchestrator if needed.
+	 */
+	private resolveTargetSession(input: EnqueueInput, item: QueueItem): ManagedPiSession {
+		const meta = input.metadata;
 
-		this.log(`processing queue item ${item.id} source=${item.source} text=${item.text.slice(0, 80)}...`);
+		// Cron always goes to default
+		if (input.source === "cron") {
+			return this.sessionManager.getDefault();
+		}
 
-		// FR-3: Turn starts → set Pi status to 'active'
-		const promptAt = this.sessionState.notePrompt(this.piSession.messages.length);
+		// Non-work messages go to default
+		if (!meta?.router_is_work || meta.router_action === "none") {
+			return this.sessionManager.getDefault();
+		}
+
+		const workstreamId = meta.workstream_id as string | undefined;
+		if (!workstreamId) {
+			return this.sessionManager.getDefault();
+		}
+
+		const action = meta.router_action as string;
+		const workstreamName = (meta.workstream_name as string) ?? workstreamId;
+
+		// Check for existing orchestrator
+		const existing = this.sessionManager.getByWorkstream(workstreamId);
+		if (existing) {
+			return existing;
+		}
+
+		// Need to spawn orchestrator — but we can't await here since resolveTargetSession is sync.
+		// Instead, enqueue to default and spawn async. The next message will route correctly.
+		// Actually, we need to handle this properly. Let's spawn synchronously by queuing
+		// a special first message after creation. We'll use a different approach:
+		// queue to default now, but trigger orchestrator creation and re-route.
+		//
+		// Better approach: since enqueue is called from async contexts (handleWebSocketMessage,
+		// handleMessageRoute), we can make spawning lazy. For now, route to default and
+		// the processQueueItem will check and spawn if needed.
+		//
+		// Store spawn intent in item metadata for processQueueItem to handle
+		if (action === "created" || action === "reopened" || action === "matched") {
+			item.metadata = {
+				...item.metadata,
+				_spawnOrchestrator: true,
+				_workstreamId: workstreamId,
+				_workstreamName: workstreamName,
+			};
+		}
+
+		return this.sessionManager.getDefault();
+	}
+
+	/**
+	 * Per-session queue processing callback.
+	 */
+	private async processQueueItem(managed: ManagedPiSession, item: QueueItem): Promise<void> {
+		const session = managed.session;
+		if (!session) throw new Error("Pi session not initialized");
+
+		// Check if this item needs to spawn an orchestrator and re-route
+		if (item.metadata?._spawnOrchestrator) {
+			const wsId = item.metadata._workstreamId as string;
+			const wsName = item.metadata._workstreamName as string;
+
+			// Clean spawn metadata
+			const cleanMeta = { ...item.metadata };
+			delete cleanMeta._spawnOrchestrator;
+			delete cleanMeta._workstreamId;
+			delete cleanMeta._workstreamName;
+			item.metadata = cleanMeta;
+
+			try {
+				const orchestrator = await this.sessionManager.createOrchestrator(
+					wsId,
+					wsName,
+					undefined,
+					this.createCustomTools("orchestrator", wsId),
+				);
+
+				// Build context-transfer prompt and enqueue to orchestrator
+				const contextPrompt = this.sessionManager.buildContextTransferPrompt(
+					item.text,
+					wsName,
+					wsId,
+				);
+
+				const reroutedItem: QueueItem = {
+					...item,
+					text: contextPrompt,
+					metadata: { ...item.metadata },
+				};
+
+				orchestrator.queue.enqueue(reroutedItem);
+				this.log(`re-routed item ${item.id} to new orchestrator for workstream "${wsName}" (${wsId})`);
+				return; // Don't process on default agent
+			} catch (error) {
+				this.log(`orchestrator spawn failed for ${wsId}, falling through to default: ${error instanceof Error ? error.message : String(error)}`);
+				// Fall through to process on default agent
+			}
+		}
+
+		const piSessionId = session.sessionId;
+
+		this.log(`processing queue item ${item.id} source=${item.source} role=${managed.role}${managed.workstreamId ? ` ws=${managed.workstreamId}` : ""} text=${item.text.slice(0, 80)}...`);
+
+		// Turn starts → set Pi status to 'active'
+		const promptAt = managed.state.notePrompt(session.messages.length);
 		touchPiPrompt(this.blackboard, piSessionId, promptAt, "active");
 
-		if (this.piSession.isStreaming) {
-			await this.piSession.prompt(item.text, {
+		const promptText = formatPromptWithContext(item, managed.role);
+
+		if (session.isStreaming) {
+			await session.prompt(promptText, {
 				streamingBehavior: item.deliveryMode ?? "followUp",
 				images: item.images,
 			});
 		} else {
-			await this.piSession.prompt(item.text, { images: item.images });
+			await session.prompt(promptText, { images: item.images });
 		}
-		this.log(`queue item ${item.id} prompt completed, messages=${this.piSession.messages.length}`);
+		this.log(`queue item ${item.id} prompt completed, messages=${session.messages.length}`);
 
-		// Check if the last assistant message was an API error (SDK returns these as completed turns)
-		const lastMsg = this.piSession.messages[this.piSession.messages.length - 1] as Record<string, unknown> | undefined;
+		// Check for API errors
+		const lastMsg = session.messages[session.messages.length - 1] as Record<string, unknown> | undefined;
 		if (lastMsg?.role === "assistant") {
 			const stopReason = (lastMsg as any).stopReason ?? (lastMsg as any).stop_reason;
 			const errorMessage = (lastMsg as any).errorMessage ?? (lastMsg as any).error_message;
@@ -405,17 +507,17 @@ export class ControlSurfaceRuntime {
 			}
 		}
 
-		this.sessionState.noteEvent(this.piSession.messages.length);
+		managed.state.noteEvent(session.messages.length);
 
-		// FR-3: Turn ends → transition to waiting_for_sessions or waiting_for_user
+		// Turn ends → transition state
 		this.transitionPiAfterTurn(piSessionId);
 
-		// Auto-surface final assistant message to WhatsApp + persist outbound
-		const finalText = this.extractFinalAssistantText();
+		// Auto-surface final assistant message
+		const finalText = extractFinalAssistantText(session);
 		if (finalText) {
-			// Persist Pi's outbound message to unified messages table
+			// Persist outbound
 			try {
-				const workstreamId = (item.metadata?.workstream_id as string) ?? undefined;
+				const workstreamId = managed.workstreamId ?? (item.metadata?.workstream_id as string) ?? undefined;
 				persistOutboundMessage(this.blackboard, {
 					source: "pi_outbound" as any,
 					content: finalText,
@@ -425,30 +527,42 @@ export class ControlSurfaceRuntime {
 				this.log(`outbound message persist failed: ${error instanceof Error ? error.message : String(error)}`);
 			}
 
+			// Surface with workstream label for orchestrators
+			const surfaceText = managed.role === "orchestrator" && managed.workstreamName
+				? `[${managed.workstreamName}] ${finalText}`
+				: finalText;
+
 			try {
 				await this.sendWhatsAppCommand({
 					command: "send",
-					text: `*B-bot:*\n---\n${finalText}`,
+					text: `*B-bot:*\n---\n${surfaceText}`,
 					contextRef: null,
 				});
-				this.wsHub.broadcast({ type: "pi_surfaced", content: finalText, timestamp: new Date().toISOString() });
+				this.wsHub.broadcast({
+					type: "pi_surfaced",
+					content: finalText,
+					timestamp: new Date().toISOString(),
+					workstreamId: managed.workstreamId ?? undefined,
+				});
 			} catch (error) {
 				this.log(`auto-surface to WhatsApp failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+
+		// If orchestrator just ran close_workstream, destroy it
+		if (managed.role === "orchestrator" && managed.workstreamId) {
+			const closedWorkstream = this.detectCloseWorkstream(session);
+			if (closedWorkstream) {
+				this.sessionManager.destroyOrchestrator(managed.workstreamId, "close_workstream");
 			}
 		}
 	}
 
 	/**
-	 * FR-3: After a Pi turn ends, check managed CC sessions to determine next state.
-	 * If active managed sessions exist → waiting_for_sessions
-	 * If none → waiting_for_user
+	 * After a Pi turn ends, check managed CC sessions to determine next state.
 	 */
 	private transitionPiAfterTurn(piSessionId: string): void {
 		try {
-			// TODO: countActiveManagedSessionsByPi is being created by another agent in sessions.ts
-			// Once available, uncomment the import at top and use:
-			// const activeCount = countActiveManagedSessionsByPi(this.blackboard, piSessionId);
-			// For now, query directly as a temporary bridge:
 			const row = this.blackboard.prepare(
 				`SELECT COUNT(*) as count FROM sessions
 				 WHERE pi_session_id = ? AND status IN ('working', 'idle') AND agent_managed = 1`,
@@ -462,28 +576,32 @@ export class ControlSurfaceRuntime {
 		}
 	}
 
-	private extractFinalAssistantText(): string | undefined {
-		if (!this.piSession?.messages?.length) return undefined;
-		// Walk backwards to find the last assistant message
-		for (let i = this.piSession.messages.length - 1; i >= 0; i--) {
-			const msg = this.piSession.messages[i] as Record<string, unknown> | undefined;
-			if (!msg || msg.role !== "assistant") continue;
-			const content = msg.content;
-			if (typeof content === "string" && content.trim()) return content.trim();
-			if (Array.isArray(content)) {
-				// Extract text blocks, skip tool_use blocks
-				const textParts = content
-					.filter((block: any) => block?.type === "text" && typeof block.text === "string")
-					.map((block: any) => block.text)
-					.join("");
-				if (textParts.trim()) return textParts.trim();
+	/**
+	 * Detect if the last tool call was close_workstream (orchestrator self-destruct).
+	 */
+	private detectCloseWorkstream(session: any): boolean {
+		const messages = session.messages;
+		if (!messages?.length) return false;
+		// Look at recent messages for a close_workstream tool result
+		for (let i = messages.length - 1; i >= Math.max(0, messages.length - 5); i--) {
+			const msg = messages[i] as Record<string, unknown> | undefined;
+			if (!msg) continue;
+			if (msg.role === "toolResult" && (msg as any).toolName === "close_workstream") {
+				return true;
 			}
-			return undefined;
+			// Also check content array for tool_use blocks
+			if (msg.role === "assistant" && Array.isArray(msg.content)) {
+				for (const block of msg.content as any[]) {
+					if (block?.type === "toolCall" && block?.name === "close_workstream") {
+						return true;
+					}
+				}
+			}
 		}
-		return undefined;
+		return false;
 	}
 
-	private createCustomTools(role: "orchestrator" | "default" = "default"): Array<any> {
+	createCustomTools(role: "orchestrator" | "default" = "default", workstreamId?: string): Array<any> {
 		const tools: Array<any> = [
 			{
 				name: "query_blackboard",
@@ -512,10 +630,14 @@ export class ControlSurfaceRuntime {
 					additionalProperties: false,
 				},
 				execute: async () => {
-					if (!this.piSession) {
+					// Reload the session that owns this tool — find by role/workstream
+					const managed = workstreamId
+						? this.sessionManager.getByWorkstream(workstreamId)
+						: this.sessionManager.getDefault();
+					if (!managed?.session) {
 						return { content: [{ type: "text", text: "Error: Pi session not initialized" }], details: {} };
 					}
-					await this.piSession.reload();
+					await managed.session.reload();
 					return {
 						content: [{ type: "text", text: "Resources reloaded. Skills, extensions, prompts, context files, and system prompt have been refreshed." }],
 						details: { reloadedAt: new Date().toISOString() },
@@ -545,6 +667,7 @@ export class ControlSurfaceRuntime {
 		];
 
 		if (role === "orchestrator") {
+			const closeWsId = workstreamId;
 			tools.push({
 				name: "close_workstream",
 				label: "Close Workstream",
@@ -559,10 +682,14 @@ export class ControlSurfaceRuntime {
 					additionalProperties: false,
 				},
 				execute: async (_toolCallId: string, params: any) => {
-					if (!this.piSession) {
-						return { content: [{ type: "text", text: "Error: Pi session not initialized" }], details: {} };
+					const managed = closeWsId
+						? this.sessionManager.getByWorkstream(closeWsId)
+						: undefined;
+					const piSessId = managed?.piSessionId;
+					if (!piSessId) {
+						return { content: [{ type: "text", text: "Error: Orchestrator session not found" }], details: {} };
 					}
-					const result = executeCloseWorkstream(this.blackboard, this.piSession.sessionId, params.workstream_id);
+					const result = executeCloseWorkstream(this.blackboard, piSessId, params.workstream_id);
 					return { content: [{ type: "text", text: result.message }], details: result };
 				},
 			});
@@ -659,11 +786,15 @@ export class ControlSurfaceRuntime {
 					}
 					markSessionEnded(this.blackboard, session.sessionId, "idle_timeout");
 				}
-				const snapshot = this.sessionState.getSnapshot();
-				if (snapshot.busy && snapshot.currentTurnStartedAt) {
-					const age = Date.now() - Date.parse(snapshot.currentTurnStartedAt);
-					if (age > this.config.toolTimeoutMinutes * 60_000) {
-						this.log(`queue turn appears stuck for ${Math.round(age / 1000)}s`);
+				// Check all active sessions for stuck turns
+				const allManaged = [this.sessionManager.getDefault(), ...this.sessionManager.listOrchestrators()];
+				for (const managed of allManaged) {
+					const snapshot = managed.state.getSnapshot();
+					if (snapshot.busy && snapshot.currentTurnStartedAt) {
+						const age = Date.now() - Date.parse(snapshot.currentTurnStartedAt);
+						if (age > this.config.toolTimeoutMinutes * 60_000) {
+							this.log(`queue turn appears stuck for ${Math.round(age / 1000)}s (${managed.role}${managed.workstreamId ? ` ws=${managed.workstreamId}` : ""})`);
+						}
 					}
 				}
 			} catch (error) {
@@ -694,7 +825,6 @@ export class ControlSurfaceRuntime {
 		const payload = data as ControlSurfaceWebSocketClientEvent;
 		if (payload.type === "message" && typeof payload.text === "string") {
 			// Route through classifier
-			let routerPrefix = "";
 			let routerMeta: Record<string, unknown> = {};
 			if (this.config.geminiApiKey) {
 				try {
@@ -704,14 +834,6 @@ export class ControlSurfaceRuntime {
 					if (result.workstream) {
 						routerMeta.workstream_id = result.workstream.id;
 						routerMeta.workstream_name = result.workstream.name;
-						const parts = [
-							`[Workstream: "${result.workstream.name}" (${result.workstream.id.slice(0, 8)})]`,
-							result.action === "created" ? " [NEW]" : "",
-							result.workstream.repo_path ? ` [repo: ${result.workstream.repo_path}]` : "",
-							result.workstream.worktree_path ? ` [worktree: ${result.workstream.worktree_path}]` : "",
-							"\n",
-						];
-						routerPrefix = parts.join("");
 					}
 				} catch (error) {
 					this.log(`router classification failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -719,7 +841,7 @@ export class ControlSurfaceRuntime {
 			}
 
 			const queued = this.enqueue({
-				text: `${routerPrefix}[Web] User: \"${payload.text}\"`,
+				text: payload.text,
 				source: "web",
 				metadata: { via: "ws", ...routerMeta },
 				webClientId: client.id,
@@ -742,6 +864,25 @@ export class ControlSurfaceRuntime {
 	}
 }
 
+function extractFinalAssistantText(session: any): string | undefined {
+	if (!session?.messages?.length) return undefined;
+	for (let i = session.messages.length - 1; i >= 0; i--) {
+		const msg = session.messages[i] as Record<string, unknown> | undefined;
+		if (!msg || msg.role !== "assistant") continue;
+		const content = msg.content;
+		if (typeof content === "string" && content.trim()) return content.trim();
+		if (Array.isArray(content)) {
+			const textParts = content
+				.filter((block: any) => block?.type === "text" && typeof block.text === "string")
+				.map((block: any) => block.text)
+				.join("");
+			if (textParts.trim()) return textParts.trim();
+		}
+		return undefined;
+	}
+	return undefined;
+}
+
 function formatHookMessage(eventName: string, payload: Record<string, unknown>): string {
 	const sessionId = pickString(payload, ["session_id", "sessionId"]);
 	const cwd = pickString(payload, ["cwd"]);
@@ -750,6 +891,7 @@ function formatHookMessage(eventName: string, payload: Record<string, unknown>):
 	const project = pickString(payload, ["project", "project_label", "projectLabel"]);
 	const reason = pickString(payload, ["reason", "stop_reason", "session_end_reason"]);
 	const agentManaged = payload.agent_managed === true || payload.agentManaged === true || payload.agent_managed === 1 || payload.agentManaged === 1;
+	const lastAssistantText = pickString(payload, ["lastAssistantText"]);
 	const lines = [
 		`[Hook: ${humanizeHookEvent(eventName)}] ${hookVerb(eventName)}`,
 		sessionId ? `Session ID: ${sessionId}` : undefined,
@@ -759,6 +901,7 @@ function formatHookMessage(eventName: string, payload: Record<string, unknown>):
 		eventName === "session-start" ? `Agent managed: ${agentManaged ? "yes" : "no"}` : undefined,
 		tmuxSession ? `Tmux session: ${tmuxSession}` : undefined,
 		reason ? `Reason: ${reason}` : undefined,
+		lastAssistantText ? `Last output: "${lastAssistantText}"` : undefined,
 	].filter(Boolean);
 	return lines.join("\n");
 }
