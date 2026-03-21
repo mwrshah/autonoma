@@ -1,11 +1,38 @@
+import { useEffect, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useControlSurface } from "~/hooks/use-control-surface";
 import type { TranscriptItem } from "~/lib/types";
 import { cn, formatDateTime, prettifyJson } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
-import { MarkdownContent } from "~/components/ui/MarkdownContent";
+import { ensurePiWebUiReady } from "~/lib/pi-web-ui-init";
 import { Button } from "~/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/Card";
+
+function LitMarkdownBlock({ content }: { content: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const elementRef = useRef<HTMLElement | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    ensurePiWebUiReady()
+      .then(() => { if (!cancelled) setReady(true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !containerRef.current) return;
+    if (!elementRef.current) {
+      const el = document.createElement("markdown-block");
+      containerRef.current.appendChild(el);
+      elementRef.current = el;
+    }
+    (elementRef.current as any).content = content;
+  }, [ready, content]);
+
+  return <div ref={containerRef} />;
+}
 
 function TranscriptRow({ item }: { item: TranscriptItem }) {
   if (item.kind === "message" && item.role) {
@@ -26,7 +53,7 @@ function TranscriptRow({ item }: { item: TranscriptItem }) {
             {formatDateTime(item.timestamp ?? undefined)}
           </span>
         </div>
-        <MarkdownContent>{item.text ?? ""}</MarkdownContent>
+        <LitMarkdownBlock content={item.text ?? ""} />
       </div>
     );
   }
