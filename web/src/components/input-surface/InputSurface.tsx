@@ -18,8 +18,8 @@ import type {
 } from "~/lib/types";
 import { createId, parseUserMessageSource } from "~/lib/utils";
 import { Badge } from "~/components/ui/Badge";
-import { MarkdownContent } from "~/components/ui/MarkdownContent";
 import { MessageInput } from "~/components/ui/MessageInput";
+import { ensurePiWebUiReady } from "~/lib/pi-web-ui-init";
 
 /* ── Types ── */
 
@@ -151,6 +151,32 @@ function OutboundEntry({ entry }: { entry: SurfaceEntry & { kind: "outbound" } }
   );
 }
 
+function LitMarkdownBlock({ content }: { content: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const elementRef = useRef<HTMLElement | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    ensurePiWebUiReady()
+      .then(() => { if (!cancelled) setReady(true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!ready || !containerRef.current) return;
+    if (!elementRef.current) {
+      const el = document.createElement("markdown-block");
+      containerRef.current.appendChild(el);
+      elementRef.current = el;
+    }
+    (elementRef.current as any).content = content;
+  }, [ready, content]);
+
+  return <div ref={containerRef} />;
+}
+
 function PiResponseEntry({ entry }: { entry: SurfaceEntry & { kind: "pi-response" } }) {
   return (
     <div className="flex gap-3 items-start">
@@ -162,7 +188,7 @@ function PiResponseEntry({ entry }: { entry: SurfaceEntry & { kind: "pi-response
         </div>
       </div>
       <div className="flex-1 min-w-0 rounded-lg border border-border bg-muted/30 px-3 py-2">
-        <MarkdownContent>{entry.content}</MarkdownContent>
+        <LitMarkdownBlock content={entry.content} />
       </div>
     </div>
   );
