@@ -29,6 +29,7 @@ export type AutonomaConfig = {
 	controlSurfacePromptPath: string;
 	geminiApiKey: string;
 	projectsDir: string;
+	cronIntervalMinutes: number;
 };
 
 const HOME = os.homedir();
@@ -97,6 +98,7 @@ export function loadConfig(): AutonomaConfig {
 				: "claude --dangerously-skip-permissions",
 		geminiApiKey,
 		projectsDir,
+		cronIntervalMinutes: Number(raw.cronIntervalMinutes ?? 5),
 		controlSurfaceDir,
 		controlSurfaceSessionsDir: sessionsDir,
 		controlSurfaceAgentDir: agentDir,
@@ -131,6 +133,7 @@ export function loadConfig(): AutonomaConfig {
 		whatsappDaemonPath: config.whatsappDaemonPath,
 		claudeCliCommand: config.claudeCliCommand,
 		projectsDir: config.projectsDir,
+		cronIntervalMinutes: config.cronIntervalMinutes,
 	};
 
 	fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(nextPersisted, null, 2)}\n`, "utf8");

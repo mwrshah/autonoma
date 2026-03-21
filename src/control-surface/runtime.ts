@@ -18,6 +18,8 @@ import type {
 } from "../contracts/index.ts";
 import { openBlackboard, pingBlackboard, type BlackboardDatabase } from "../blackboard/db.ts";
 import { executeCloseWorkstream } from "./tools/close-workstream.ts";
+import { executeCreateWorktree } from "./tools/create-worktree.ts";
+import { enrichWorkstream, getWorkstreamById } from "../blackboard/queries/workstreams.ts";
 import {
 	endPiSession,
 	reconcilePreviousPiSessions,
@@ -44,6 +46,8 @@ import { WebSocketHub, type WebSocketClient } from "./ws/hub.ts";
 import { sendDaemonCommand } from "../whatsapp/ipc.ts";
 import { getDaemonStatus, startDaemonProcess, stopDaemonProcess, waitForDaemonReady } from "../whatsapp/process.ts";
 import { directSessionMessage } from "./tools/manage-session.ts";
+import { startCronLoop } from "./cron.ts";
+import { persistInboundMessage, persistOutboundMessage } from "../blackboard/queries/messages.ts";
 
 type EnqueueInput = {
 	text: string;
@@ -70,6 +74,7 @@ export class ControlSurfaceRuntime {
 	private unsubscribePi?: () => void;
 	private stopping = false;
 	private maintenanceTimer?: NodeJS.Timeout;
+	private cronTimer?: NodeJS.Timeout;
 	private whatsappStatusCache: {
 		status: ControlSurfaceWhatsAppStatus;
 		pid?: number;
@@ -136,6 +141,7 @@ export class ControlSurfaceRuntime {
 		await this.ensureWhatsAppDaemon();
 		await this.refreshWhatsAppStatus();
 		this.startMaintenanceLoop();
+		this.startCronLoop();
 		this.log(`runtime started on ${this.config.controlSurfaceHost}:${this.config.controlSurfacePort}`);
 	}
 
@@ -145,6 +151,7 @@ export class ControlSurfaceRuntime {
 		this.log(`runtime stopping: ${reason}`);
 		this.queue.stop();
 		if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
+		if (this.cronTimer) clearInterval(this.cronTimer);
 		try {
 			this.unsubscribePi?.();
 		} catch {
@@ -201,6 +208,22 @@ export class ControlSurfaceRuntime {
 		};
 		const queueDepth = this.queue.enqueue(item);
 		this.log(`queued ${item.source} item ${item.id} depth=${queueDepth}`);
+
+		// Persist to unified messages table
+		try {
+			const source = item.source as "whatsapp" | "web" | "hook" | "cron";
+			const workstreamId = (input.metadata?.workstream_id as string) ?? undefined;
+			persistInboundMessage(this.blackboard, {
+				source,
+				content: input.text,
+				sender: source === "hook" ? "system" : "user",
+				workstreamId,
+				metadata: input.metadata,
+			});
+		} catch (error) {
+			this.log(`message persist failed: ${error instanceof Error ? error.message : String(error)}`);
+		}
+
 		return { ok: true, queued: true, queueDepth, item };
 	}
 
@@ -363,9 +386,21 @@ export class ControlSurfaceRuntime {
 		// FR-3: Turn ends → transition to waiting_for_sessions or waiting_for_user
 		this.transitionPiAfterTurn(piSessionId);
 
-		// Auto-surface final assistant message to WhatsApp
+		// Auto-surface final assistant message to WhatsApp + persist outbound
 		const finalText = this.extractFinalAssistantText();
 		if (finalText) {
+			// Persist Pi's outbound message to unified messages table
+			try {
+				const workstreamId = (item.metadata?.workstream_id as string) ?? undefined;
+				persistOutboundMessage(this.blackboard, {
+					source: "pi_outbound" as any,
+					content: finalText,
+					workstreamId,
+				});
+			} catch (error) {
+				this.log(`outbound message persist failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+
 			try {
 				await this.sendWhatsAppCommand({
 					command: "send",
@@ -461,6 +496,53 @@ export class ControlSurfaceRuntime {
 						content: [{ type: "text", text: "Resources reloaded. Skills, extensions, prompts, context files, and system prompt have been refreshed." }],
 						details: { reloadedAt: new Date().toISOString() },
 					};
+				},
+			},
+			{
+				name: "update_workstream",
+				label: "Update Workstream",
+				description:
+					"Update a workstream's repo_path and worktree_path. Call after creating a git worktree for a workstream.",
+				parameters: {
+					type: "object",
+					properties: {
+						workstream_id: { type: "string", description: "ID of the workstream to update" },
+						repo_path: { type: "string", description: "Absolute path to the repository" },
+						worktree_path: { type: "string", description: "Absolute path to the git worktree (if different from repo_path)" },
+					},
+					required: ["workstream_id", "repo_path"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const ws = getWorkstreamById(this.blackboard, params.workstream_id);
+					if (!ws) {
+						return { content: [{ type: "text", text: `Workstream ${params.workstream_id} not found` }], details: { ok: false } };
+					}
+					enrichWorkstream(this.blackboard, params.workstream_id, params.repo_path, params.worktree_path);
+					return {
+						content: [{ type: "text", text: `Workstream "${ws.name}" updated: repo=${params.repo_path}${params.worktree_path ? `, worktree=${params.worktree_path}` : ""}` }],
+						details: { ok: true, workstreamId: params.workstream_id },
+					};
+				},
+			},
+			{
+				name: "create_worktree",
+				label: "Create Git Worktree",
+				description:
+					"Create an isolated git worktree for a workstream. Sets up a new branch from origin/main and records the paths on the workstream.",
+				parameters: {
+					type: "object",
+					properties: {
+						workstream_id: { type: "string", description: "ID of the workstream" },
+						repo_path: { type: "string", description: "Absolute path to the project repository" },
+						branch_name: { type: "string", description: "Branch name (optional, defaults to ws/<workstream-slug>)" },
+					},
+					required: ["workstream_id", "repo_path"],
+					additionalProperties: false,
+				},
+				execute: async (_toolCallId: string, params: any) => {
+					const result = executeCreateWorktree(this.blackboard, params.workstream_id, params.repo_path, params.branch_name);
+					return { content: [{ type: "text", text: result.message }], details: result };
 				},
 			},
 			{
@@ -586,6 +668,18 @@ export class ControlSurfaceRuntime {
 				this.log(`maintenance error: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}, 60_000);
+	}
+
+	private startCronLoop(): void {
+		const intervalMs = this.config.cronIntervalMinutes * 60_000;
+		this.cronTimer = startCronLoop(intervalMs, {
+			blackboard: this.blackboard,
+			piSessionId: () => this.piSession?.sessionId,
+			enqueue: (text) => {
+				this.enqueue({ text, source: "cron" });
+			},
+			log: (msg) => this.log(msg),
+		});
 	}
 
 	private ensurePidFile(): void {
