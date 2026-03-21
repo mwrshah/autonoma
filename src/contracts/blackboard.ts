@@ -1,4 +1,4 @@
-export const BLACKBOARD_SCHEMA_VERSION = 6;
+export const BLACKBOARD_SCHEMA_VERSION = 7;
 
 export type ClaudeSessionStatus = "working" | "idle" | "stale" | "ended";
 export type PiSessionStatus = "active" | "waiting_for_user" | "waiting_for_sessions" | "ended" | "crashed";
@@ -97,6 +97,14 @@ export interface PendingActionRow {
   resolution_payload: string | null;
 }
 
+export interface HealthFlagRow {
+  flag: string;
+  reason: string;
+  set_at: string;
+  expires_at: string | null;
+  cleared_at: string | null;
+}
+
 export const BLACKBOARD_SCHEMA_SQL = `
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
@@ -185,6 +193,14 @@ CREATE TABLE IF NOT EXISTS messages (
     workstream_id TEXT REFERENCES workstreams(id) ON DELETE SET NULL,
     metadata TEXT,
     created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS health_flags (
+    flag TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    set_at DATETIME NOT NULL DEFAULT (datetime('now')),
+    expires_at DATETIME,
+    cleared_at DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS pending_actions (

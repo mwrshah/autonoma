@@ -33,7 +33,16 @@ function hasLegacyMarkers(db: DatabaseSync): boolean {
   return Number(row.count ?? 0) > 0;
 }
 
-function ensureSchemaTables(db: DatabaseSync): void {
+function ensureMigrationsTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at DATETIME NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function applyFullSchema(db: DatabaseSync): void {
   db.exec(BLACKBOARD_SCHEMA_SQL);
 }
 
@@ -66,7 +75,7 @@ function applyLegacyUpgrade(db: DatabaseSync): void {
       db.exec("ALTER TABLE sessions RENAME TO sessions_legacy;");
     }
 
-    ensureSchemaTables(db);
+    applyFullSchema(db);
 
     if (hasTable(db, "sessions_legacy")) {
       db.exec(`
@@ -288,11 +297,36 @@ function applyV6Migration(db: DatabaseSync): void {
   }
 }
 
+function applyV7Migration(db: DatabaseSync): void {
+  db.exec("BEGIN IMMEDIATE;");
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS health_flags (
+          flag TEXT PRIMARY KEY,
+          reason TEXT NOT NULL,
+          set_at DATETIME NOT NULL DEFAULT (datetime('now')),
+          expires_at DATETIME,
+          cleared_at DATETIME
+      );
+
+      INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);
+    `);
+
+    db.exec("COMMIT;");
+  } catch (error) {
+    db.exec("ROLLBACK;");
+    throw error;
+  }
+}
+
 export function migrateBlackboard(db: DatabaseSync): number {
-  ensureSchemaTables(db);
+  ensureMigrationsTable(db);
 
   let version = getSchemaVersion(db);
   if (version === 0) {
+    // Fresh database — apply full schema at once
+    applyFullSchema(db);
     db.prepare("INSERT OR IGNORE INTO schema_migrations(version) VALUES (?)").run(LATEST_BLACKBOARD_SCHEMA_VERSION);
     return LATEST_BLACKBOARD_SCHEMA_VERSION;
   }
@@ -314,6 +348,11 @@ export function migrateBlackboard(db: DatabaseSync): number {
 
   if (version < 6) {
     applyV6Migration(db);
+    version = getSchemaVersion(db);
+  }
+
+  if (version < 7) {
+    applyV7Migration(db);
   }
 
   return getSchemaVersion(db);

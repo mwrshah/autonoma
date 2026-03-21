@@ -12,6 +12,7 @@ import { handleRuntimeWhatsAppRoute } from "./routes/runtime-whatsapp.ts";
 import { handleStatusRoute } from "./routes/status.ts";
 import { handleBrowserSkillsRoute } from "./routes/browser-skills.ts";
 import { handleStopRoute } from "./routes/stop.ts";
+import { handleCronTickRoute } from "./routes/cron-tick.ts";
 
 const runtime = new ControlSurfaceRuntime();
 
@@ -84,6 +85,9 @@ async function routeRequest(req: http.IncomingMessage, res: http.ServerResponse)
 	}
 	if (method === CONTROL_SURFACE_ENDPOINTS.stop.method && pathname === CONTROL_SURFACE_ENDPOINTS.stop.path) {
 		return handleStopRoute(runtime, req, res);
+	}
+	if (method === CONTROL_SURFACE_ENDPOINTS.cronTick.method && pathname === CONTROL_SURFACE_ENDPOINTS.cronTick.path) {
+		return handleCronTickRoute(runtime, req, res);
 	}
 	if (method === CONTROL_SURFACE_ENDPOINTS.sessions.method && pathname === CONTROL_SURFACE_ENDPOINTS.sessions.path) {
 		return handleBrowserSessionsRoute(runtime, req, res);

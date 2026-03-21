@@ -29,7 +29,7 @@ export type AutonomaConfig = {
 	controlSurfacePromptPath: string;
 	geminiApiKey: string;
 	projectsDir: string;
-	cronIntervalMinutes: number;
+	wipeWorkstreamsOnStart: boolean;
 };
 
 const HOME = os.homedir();
@@ -73,6 +73,7 @@ export function loadConfig(): AutonomaConfig {
 	const whatsappDaemonPath = expandHome(String(raw.whatsappDaemonPath ?? "~/.autonoma/whatsapp/daemon.js"));
 	const projectsDir = expandHome(String(raw.projectsDir ?? "~/development"));
 	const geminiApiKey = String(raw.geminiApiKey ?? process.env.GEMINI_API_KEY ?? "");
+	const wipeWorkstreamsOnStart = Boolean(raw.wipeWorkstreamsOnStart ?? process.env.AUTONOMA_WIPE_WORKSTREAMS === "1" ?? false);
 	const configuredPiModel = String(raw.piModel ?? "");
 	const configuredClaudeCliCommand = String(raw.claudeCliCommand ?? "");
 	const config: AutonomaConfig = {
@@ -98,7 +99,8 @@ export function loadConfig(): AutonomaConfig {
 				: "claude --dangerously-skip-permissions",
 		geminiApiKey,
 		projectsDir,
-		cronIntervalMinutes: Number(raw.cronIntervalMinutes ?? 5),
+		wipeWorkstreamsOnStart,
+
 		controlSurfaceDir,
 		controlSurfaceSessionsDir: sessionsDir,
 		controlSurfaceAgentDir: agentDir,
@@ -133,7 +135,7 @@ export function loadConfig(): AutonomaConfig {
 		whatsappDaemonPath: config.whatsappDaemonPath,
 		claudeCliCommand: config.claudeCliCommand,
 		projectsDir: config.projectsDir,
-		cronIntervalMinutes: config.cronIntervalMinutes,
+		wipeWorkstreamsOnStart: config.wipeWorkstreamsOnStart,
 	};
 
 	fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(nextPersisted, null, 2)}\n`, "utf8");

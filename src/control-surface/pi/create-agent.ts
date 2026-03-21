@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { fileURLToPath } from "node:url";
+
 import {
 	AuthStorage,
 	createAgentSession,
@@ -15,12 +15,11 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { getModel } from "@mariozechner/pi-ai";
 import type { AutonomaConfig } from "../../config/load-config.ts";
-import { DEFAULT_AGENT_PROMPT, buildOrchestratorPrompt } from "./system-prompt.ts";
-import type { OrchestratorContext } from "./system-prompt.ts";
+import { DEFAULT_AGENT_PROMPT, buildOrchestratorPrompt } from "./system-prompts/index.ts";
+import type { OrchestratorContext } from "./system-prompts/index.ts";
 
 const HOME = os.homedir();
-const THIS_DIR = path.dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = path.resolve(THIS_DIR, "../../..");
+const WORKING_DIR = path.join(HOME, "development");
 
 type PiRole = "default" | "orchestrator";
 
@@ -35,12 +34,23 @@ export async function createAutonomaAgent(options: CreateAutonomaAgentOptions) {
 	const { config, customTools, role = "default", orchestratorContext } = options;
 	const systemPrompt = resolveSystemPrompt(role, orchestratorContext);
 	ensurePromptFile(config.controlSurfacePromptPath, systemPrompt);
-	const authStorage = AuthStorage.create(path.join(config.controlSurfaceAgentDir, "auth.json"));
-	const modelRegistry = new ModelRegistry(authStorage, path.join(config.controlSurfaceAgentDir, "models.json"));
+	// Use the canonical Pi auth — same OAuth tokens the Pi CLI uses after `pi auth login`.
+	// ~/.autonoma/control-surface/agent/auth.json is symlinked here, but if someone
+	// breaks the symlink we still resolve to the right place.
+	const piAuthPath = path.join(HOME, ".pi", "agent", "auth.json");
+	const authPath = fs.existsSync(piAuthPath) ? piAuthPath : path.join(config.controlSurfaceAgentDir, "auth.json");
+	const authStorage = AuthStorage.create(authPath);
+	// Use ~/.pi/agent as the agent dir — same as the Pi CLI. This picks up
+	// AGENTS.md, models.json, and any agent-level config from the canonical location
+	// instead of a separate ~/.autonoma/control-surface/agent/ silo.
+	const piAgentDir = path.join(HOME, ".pi", "agent");
+	const agentDir = fs.existsSync(piAgentDir) ? piAgentDir : config.controlSurfaceAgentDir;
+
+	const modelRegistry = new ModelRegistry(authStorage, path.join(agentDir, "models.json"));
 	const settingsManager = SettingsManager.inMemory();
 	const resourceLoader = new DefaultResourceLoader({
-		cwd: PROJECT_ROOT,
-		agentDir: config.controlSurfaceAgentDir,
+		cwd: WORKING_DIR,
+		agentDir,
 		settingsManager,
 		additionalSkillPaths: [path.join(HOME, ".agents", "skills")].filter((entry) => fs.existsSync(entry)),
 		systemPromptOverride: () => fs.readFileSync(config.controlSurfacePromptPath, "utf8"),
@@ -53,14 +63,14 @@ export async function createAutonomaAgent(options: CreateAutonomaAgentOptions) {
 	}
 
 	const created = await createAgentSession({
-		cwd: HOME,
-		agentDir: config.controlSurfaceAgentDir,
+		cwd: WORKING_DIR,
+		agentDir,
 		model,
 		thinkingLevel: config.piThinkingLevel,
-		tools: [createReadTool(HOME), createBashTool(HOME), createGrepTool(HOME)],
+		tools: [createReadTool(WORKING_DIR), createBashTool(WORKING_DIR), createGrepTool(WORKING_DIR)],
 		customTools,
 		resourceLoader,
-		sessionManager: SessionManager.create(HOME, config.controlSurfaceSessionsDir),
+		sessionManager: SessionManager.create(WORKING_DIR, config.controlSurfaceSessionsDir),
 		settingsManager,
 		authStorage,
 		modelRegistry,

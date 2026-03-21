@@ -19,6 +19,7 @@ import type {
 import { openBlackboard, pingBlackboard, type BlackboardDatabase } from "../blackboard/db.ts";
 import { executeCloseWorkstream } from "./tools/close-workstream.ts";
 import { executeCreateWorktree } from "./tools/create-worktree.ts";
+import { resetAllWorkstreams } from "../blackboard/queries/workstreams.ts";
 import {
 	endPiSession,
 	reconcilePreviousPiSessions,
@@ -45,8 +46,8 @@ import { WebSocketHub, type WebSocketClient } from "./ws/hub.ts";
 import { sendDaemonCommand } from "../whatsapp/ipc.ts";
 import { getDaemonStatus, startDaemonProcess, stopDaemonProcess, waitForDaemonReady } from "../whatsapp/process.ts";
 import { directSessionMessage } from "./tools/manage-session.ts";
-import { startCronLoop } from "./cron.ts";
 import { persistInboundMessage, persistOutboundMessage } from "../blackboard/queries/messages.ts";
+import { clearAllHealthFlags } from "../blackboard/queries/health-flags.ts";
 
 type EnqueueInput = {
 	text: string;
@@ -73,7 +74,6 @@ export class ControlSurfaceRuntime {
 	private unsubscribePi?: () => void;
 	private stopping = false;
 	private maintenanceTimer?: NodeJS.Timeout;
-	private cronTimer?: NodeJS.Timeout;
 	private whatsappStatusCache: {
 		status: ControlSurfaceWhatsAppStatus;
 		pid?: number;
@@ -97,6 +97,12 @@ export class ControlSurfaceRuntime {
 			},
 			onItemEnd: (item, error) => {
 				this.sessionState.setBusy(false);
+				if (error) {
+					const detail = error instanceof Error
+						? `${error.message}${(error as any).status ? ` [status=${(error as any).status}]` : ""}${(error as any).body ? ` body=${JSON.stringify((error as any).body).slice(0, 200)}` : ""}`
+						: String(error);
+					this.log(`queue item ${item.id} failed: ${detail}`);
+				}
 				this.wsHub.broadcast({
 					type: "queue_item_end",
 					itemId: item.id,
@@ -114,6 +120,11 @@ export class ControlSurfaceRuntime {
 		this.ensurePidFile();
 		reconcilePreviousPiSessions(this.blackboard, "orchestrator", this.runtimeInstanceId, "restart");
 
+		if (this.config.wipeWorkstreamsOnStart) {
+			const closed = resetAllWorkstreams(this.blackboard);
+			if (closed > 0) this.log(`wiped ${closed} open workstream(s) on startup (wipeWorkstreamsOnStart=true)`);
+		}
+
 		const created = await createAutonomaAgent({
 			config: this.config,
 			customTools: this.createCustomTools("orchestrator"),
@@ -128,7 +139,7 @@ export class ControlSurfaceRuntime {
 			runtimeInstanceId: this.runtimeInstanceId,
 			pid: process.pid,
 			sessionFile: created.session.sessionFile,
-			cwd: process.env.HOME ?? process.cwd(),
+			cwd: path.join(process.env.HOME ?? "/home/mas", "development"),
 			agentDir: this.config.controlSurfaceAgentDir,
 			modelProvider: created.modelInfo.provider,
 			modelId: created.modelInfo.id,
@@ -140,7 +151,7 @@ export class ControlSurfaceRuntime {
 		await this.ensureWhatsAppDaemon();
 		await this.refreshWhatsAppStatus();
 		this.startMaintenanceLoop();
-		this.startCronLoop();
+		clearAllHealthFlags(this.blackboard);
 		this.log(`runtime started on ${this.config.controlSurfaceHost}:${this.config.controlSurfacePort}`);
 	}
 
@@ -150,7 +161,6 @@ export class ControlSurfaceRuntime {
 		this.log(`runtime stopping: ${reason}`);
 		this.queue.stop();
 		if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
-		if (this.cronTimer) clearInterval(this.cronTimer);
 		try {
 			this.unsubscribePi?.();
 		} catch {
@@ -368,6 +378,8 @@ export class ControlSurfaceRuntime {
 		if (!this.piSession) throw new Error("Pi session not initialized");
 		const piSessionId = this.piSession.sessionId;
 
+		this.log(`processing queue item ${item.id} source=${item.source} text=${item.text.slice(0, 80)}...`);
+
 		// FR-3: Turn starts → set Pi status to 'active'
 		const promptAt = this.sessionState.notePrompt(this.piSession.messages.length);
 		touchPiPrompt(this.blackboard, piSessionId, promptAt, "active");
@@ -380,6 +392,19 @@ export class ControlSurfaceRuntime {
 		} else {
 			await this.piSession.prompt(item.text, { images: item.images });
 		}
+		this.log(`queue item ${item.id} prompt completed, messages=${this.piSession.messages.length}`);
+
+		// Check if the last assistant message was an API error (SDK returns these as completed turns)
+		const lastMsg = this.piSession.messages[this.piSession.messages.length - 1] as Record<string, unknown> | undefined;
+		if (lastMsg?.role === "assistant") {
+			const stopReason = (lastMsg as any).stopReason ?? (lastMsg as any).stop_reason;
+			const errorMessage = (lastMsg as any).errorMessage ?? (lastMsg as any).error_message;
+			if (stopReason === "error" || errorMessage) {
+				this.log(`queue item ${item.id} API error: ${errorMessage ?? "unknown"}`);
+				throw new Error(`Pi API error: ${errorMessage ?? stopReason}`);
+			}
+		}
+
 		this.sessionState.noteEvent(this.piSession.messages.length);
 
 		// FR-3: Turn ends → transition to waiting_for_sessions or waiting_for_user
@@ -647,18 +672,6 @@ export class ControlSurfaceRuntime {
 		}, 60_000);
 	}
 
-	private startCronLoop(): void {
-		const intervalMs = this.config.cronIntervalMinutes * 60_000;
-		this.cronTimer = startCronLoop(intervalMs, {
-			blackboard: this.blackboard,
-			piSessionId: () => this.piSession?.sessionId,
-			enqueue: (text) => {
-				this.enqueue({ text, source: "cron" });
-			},
-			log: (msg) => this.log(msg),
-		});
-	}
-
 	private ensurePidFile(): void {
 		const existingPid = readPid(this.config.controlSurfacePidPath);
 		if (existingPid && isPidRunning(existingPid)) {
@@ -670,7 +683,6 @@ export class ControlSurfaceRuntime {
 
 	private log(message: string): void {
 		const line = `[${new Date().toISOString()}] ${message}`;
-		console.log(line);
 		fs.appendFileSync(this.config.controlSurfaceLogPath, `${line}\n`, "utf8");
 	}
 

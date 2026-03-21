@@ -65,7 +65,7 @@ export function ChatPanel() {
   const [streamingText, setStreamingText] = useState<string | null>(null);
   const [statusPills, setStatusPills] = useState<StatusPill[]>([]);
   const activeAssistantId = useRef<string | null>(null);
-  const sentTextsRef = useRef<Set<string>>(new Set());
+
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
 
@@ -171,14 +171,6 @@ export function ChatPanel() {
         const content = message.content || "";
 
         if (message.role === "user") {
-          // Deduplicate: skip user messages this client already displayed optimistically.
-          // The backend wraps web messages as: [Web] User: "text"
-          for (const sent of sentTextsRef.current) {
-            if (content === `[Web] User: "${sent}"`) {
-              sentTextsRef.current.delete(sent);
-              return;
-            }
-          }
           if (content.trim()) {
             const parsed = parseUserMessageSource(content);
             setTimeline((current) => [
@@ -338,18 +330,7 @@ export function ChatPanel() {
     setPendingImages([]);
     isAtBottomRef.current = true;
 
-    setTimeline((current) => [
-      ...current,
-      {
-        id: createId("user"),
-        kind: "message",
-        role: "user",
-        content: text || "(image)",
-        images,
-        createdAt: new Date().toISOString(),
-      },
-    ]);
-    if (text) sentTextsRef.current.add(text);
+    // No optimistic update — wait for the server's decorated message via WebSocket.
 
     try {
       await wsClient.sendMessage(text || "(image)", deliveryMode, images);

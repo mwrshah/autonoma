@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
-const MODEL_ID = "gemini-2.0-flash-lite";
+const MODEL_ID = "gemini-3.1-flash-lite-preview";
 
 let cachedClient: GoogleGenAI | null = null;
 
@@ -41,6 +41,8 @@ export async function callGeminiClassify(
 	apiKey: string,
 	prompt: string,
 ): Promise<GeminiClassifyResult> {
+	console.log("[router] Gemini classify prompt:\n%s", prompt);
+
 	const client = getClient(apiKey);
 	const response = await client.models.generateContent({
 		model: MODEL_ID,
@@ -53,16 +55,20 @@ export async function callGeminiClassify(
 	});
 
 	const text = response.text;
+	console.log("[router] Gemini raw response: %s", text ?? "(empty)");
+
 	if (!text) {
 		return { workstream_id: null, new_workstream_name: null, is_work_message: false };
 	}
 
 	const parsed = JSON.parse(text) as GeminiClassifyResult;
-	return {
+	const result = {
 		workstream_id: parsed.workstream_id || null,
 		new_workstream_name: parsed.new_workstream_name || null,
 		is_work_message: Boolean(parsed.is_work_message),
 	};
+	console.log("[router] Gemini classify result: %o", result);
+	return result;
 }
 
 /** Reset cached client (for testing or key rotation). */

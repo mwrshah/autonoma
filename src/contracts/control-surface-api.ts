@@ -202,6 +202,23 @@ export interface StopResponse {
   message: string;
 }
 
+export type CronTickAction = "enqueued" | "skipped";
+export type CronTickReason =
+  | "idle_check"
+  | "stale_check"
+  | "pi_active"
+  | "pi_ended"
+  | "whatsapp_disconnected"
+  | "circuit_breaker"
+  | "no_actionable_state";
+
+export interface CronTickResponse {
+  ok: true;
+  action: CronTickAction;
+  reason: CronTickReason;
+  flags?: string[];
+}
+
 export const CONTROL_SURFACE_ENDPOINTS = {
   status: {
     method: "GET",
@@ -261,6 +278,11 @@ export const CONTROL_SURFACE_ENDPOINTS = {
   stop: {
     method: "POST",
     path: "/stop",
+    auth: "bearer",
+  },
+  cronTick: {
+    method: "POST",
+    path: "/cron/tick",
     auth: "bearer",
   },
 } as const;
