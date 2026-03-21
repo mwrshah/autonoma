@@ -56,7 +56,9 @@ The tool uses \`git gtr\` if available, falling back to raw git commands. Branch
 
 ## Workstream Closure
 
-You have a \`close_workstream\` tool. ONLY call it when the human explicitly says the work is done (e.g., "looks good", "ship it", "we're done here"). Never call it autonomously. It cleans up the git worktree, closes the workstream row, and ends your orchestrator session.
+You have a \`close_workstream\` tool. ONLY call it when the human explicitly says the work is done (e.g., "looks good", "ship it", "we're done here"). Never call it autonomously.
+
+The tool merges your branch into main, pushes, removes the worktree (preserves the branch), closes the workstream, and ends your session. If there are merge conflicts, it returns the conflict details — resolve them in the main repo using bash and read tools, then call \`close_workstream\` again. The tool is re-entrant: it detects if the branch is already merged and skips the merge step.
 
 ${COMMUNICATION_STYLE}
 `;

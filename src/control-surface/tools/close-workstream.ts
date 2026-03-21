@@ -9,12 +9,19 @@ type CloseWorkstreamResult = {
   ok: boolean;
   workstreamId: string;
   message: string;
+  conflicts?: string[];
   worktreeRemoved?: boolean;
+  merged?: boolean;
+  pushed?: boolean;
 };
+
+function exec(cmd: string, cwd: string, timeoutMs = 30_000): string {
+  return execSync(cmd, { cwd, timeout: timeoutMs, stdio: "pipe" }).toString().trim();
+}
 
 function hasGtr(cwd: string): boolean {
   try {
-    execSync("git gtr version", { cwd, timeout: 5_000, stdio: "pipe" });
+    exec("git gtr version", cwd, 5_000);
     return true;
   } catch {
     return false;
@@ -23,18 +30,97 @@ function hasGtr(cwd: string): boolean {
 
 function inferBranchFromWorktree(worktreePath: string): string | null {
   try {
-    const output = execSync("git branch --show-current", { cwd: worktreePath, timeout: 5_000, stdio: "pipe" })
-      .toString()
-      .trim();
-    return output || null;
+    return exec("git branch --show-current", worktreePath, 5_000) || null;
   } catch {
     return null;
   }
 }
 
+function isBranchAncestorOf(repoPath: string, branch: string, target: string): boolean {
+  try {
+    execSync(`git merge-base --is-ancestor ${branch} ${target}`, { cwd: repoPath, timeout: 10_000, stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getConflictedFiles(repoPath: string): string[] {
+  try {
+    const output = exec("git diff --name-only --diff-filter=U", repoPath, 5_000);
+    return output ? output.split("\n").filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+type MergeResult =
+  | { ok: true }
+  | { ok: false; conflicts: string[]; message: string };
+
+function mergeToMain(
+  repoPath: string,
+  branch: string,
+): MergeResult {
+  // Fetch latest
+  try {
+    exec("git fetch origin", repoPath);
+  } catch {
+    // Non-fatal — continue with local state
+  }
+
+  // Check if already merged
+  if (isBranchAncestorOf(repoPath, branch, "main")) {
+    return { ok: true };
+  }
+
+  // Checkout main
+  try {
+    exec("git checkout main", repoPath);
+  } catch (error: any) {
+    return { ok: false, conflicts: [], message: `Failed to checkout main: ${error.stderr?.toString().trim() || error.message}` };
+  }
+
+  // Pull latest main
+  try {
+    exec("git pull origin main --ff-only", repoPath);
+  } catch {
+    // Non-fatal — continue with local main
+  }
+
+  // Attempt merge
+  try {
+    exec(`git merge ${branch} --no-edit`, repoPath);
+    return { ok: true };
+  } catch {
+    // Check if it's a conflict or a different error
+    const conflicts = getConflictedFiles(repoPath);
+    if (conflicts.length > 0) {
+      // Abort the failed merge so the repo isn't left in a dirty state
+      try { exec("git merge --abort", repoPath); } catch { /* ignore */ }
+      return {
+        ok: false,
+        conflicts,
+        message: `Merge conflict: ${conflicts.length} file(s) conflicted: ${conflicts.join(", ")}`,
+      };
+    }
+    // Non-conflict merge failure
+    try { exec("git merge --abort", repoPath); } catch { /* ignore */ }
+    return { ok: false, conflicts: [], message: "Merge failed (non-conflict error)" };
+  }
+}
+
+function pushMain(repoPath: string): boolean {
+  try {
+    exec("git push origin main", repoPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function removeWithGtr(repoPath: string, branch: string): boolean {
   try {
-    // --yes to skip confirmation, no --delete-branch to preserve the branch for PR/review
     execSync(`git gtr rm ${branch} --yes`, { cwd: repoPath, timeout: 15_000, stdio: "pipe" });
     return true;
   } catch {
@@ -69,27 +155,62 @@ export function executeCloseWorkstream(
     return { ok: false, workstreamId, message: `Workstream ${workstreamId} is already closed` };
   }
 
-  let worktreeRemoved = false;
-  if (workstream.worktree_path && fs.existsSync(workstream.worktree_path)) {
-    const branch = inferBranchFromWorktree(workstream.worktree_path);
-    const repoPath = workstream.repo_path || path.resolve(workstream.worktree_path, "..");
+  const worktreePath = workstream.worktree_path;
+  const repoPath = workstream.repo_path;
+  let branch: string | null = null;
+  let merged = false;
+  let pushed = false;
 
-    if (branch && hasGtr(repoPath)) {
-      worktreeRemoved = removeWithGtr(repoPath, branch);
-    }
-    if (!worktreeRemoved) {
-      worktreeRemoved = removeWithRawGit(workstream.worktree_path);
+  // Step 1: Merge branch to main (if worktree exists)
+  if (worktreePath && fs.existsSync(worktreePath) && repoPath) {
+    branch = inferBranchFromWorktree(worktreePath);
+
+    if (branch) {
+      const mergeResult = mergeToMain(repoPath, branch);
+      if (mergeResult.ok === false) {
+        // Return early — Pi resolves conflicts and calls again
+        return {
+          ok: false,
+          workstreamId,
+          message: mergeResult.message + ". Resolve conflicts in the main repo, then call close_workstream again.",
+          conflicts: mergeResult.conflicts,
+        };
+      }
+      merged = true;
+
+      // Push main after clean merge
+      pushed = pushMain(repoPath);
     }
   }
 
+  // Step 2: Remove worktree (branch preserved for history)
+  let worktreeRemoved = false;
+  if (worktreePath && fs.existsSync(worktreePath)) {
+    const effectiveRepo = repoPath || path.resolve(worktreePath, "..");
+    if (branch && hasGtr(effectiveRepo)) {
+      worktreeRemoved = removeWithGtr(effectiveRepo, branch);
+    }
+    if (!worktreeRemoved) {
+      worktreeRemoved = removeWithRawGit(worktreePath);
+    }
+  }
+
+  // Step 3: Close workstream and end Pi session
   closeWorkstream(blackboard, workstreamId);
   endPiSession(blackboard, piSessionId, "ended", "workstream_closed");
+
+  const parts = [`Workstream "${workstream.name}" closed.`];
+  if (merged) parts.push("Branch merged to main.");
+  if (pushed) parts.push("Pushed to origin.");
+  if (worktreeRemoved) parts.push("Worktree removed (branch preserved).");
 
   return {
     ok: true,
     workstreamId,
-    message: `Workstream "${workstream.name}" closed.${worktreeRemoved ? " Worktree removed (branch preserved)." : ""}`,
+    message: parts.join(" "),
     worktreeRemoved,
+    merged,
+    pushed,
   };
 }
 
@@ -98,7 +219,7 @@ export function createCloseWorkstreamTool(blackboard: BlackboardDatabase, piSess
     name: "close_workstream",
     label: "Close Workstream",
     description:
-      "Close the current workstream. Only call when the human explicitly confirms the work is done. Removes the git worktree (preserves the branch for PR/review), closes the workstream, and ends this orchestrator session.",
+      "Close the current workstream. Merges the branch into main, pushes, removes the worktree (preserves the branch), closes the workstream, and ends this orchestrator session. If there are merge conflicts, returns the conflict details — resolve them and call again. Only call when the human explicitly confirms the work is done.",
     parameters: {
       type: "object",
       properties: {
